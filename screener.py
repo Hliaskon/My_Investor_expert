@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import math, os, smtplib, json, time, random
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
@@ -11,6 +12,15 @@ WATCHLIST = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+})
 
 SECTOR_RISK = {
     "Technology":             {"macro": "low",    "sector": "medium"},
@@ -73,7 +83,7 @@ def risk_score(pe, pb, beta, de, sector):
 
 def get_sparkline(ticker, period="1y"):
     try:
-        hist   = yf.Ticker(ticker).history(period=period, interval="1wk")
+        hist   = yf.Ticker(ticker, session=session).history(period=period, interval="1wk")
         prices = hist["Close"].dropna().tolist()
         return [round(p, 2) for p in prices[-52:]]
     except:
@@ -82,7 +92,7 @@ def get_sparkline(ticker, period="1y"):
 def screen_ticker(ticker, retries=3):
     for attempt in range(retries):
         try:
-            t    = yf.Ticker(ticker)
+            t    = yf.Ticker(ticker, session=session)
             info = t.info
 
             if not info or (not info.get("currentPrice") and not info.get("regularMarketPrice")):
@@ -123,38 +133,38 @@ def screen_ticker(ticker, retries=3):
                 return None
 
             return {
-                "ticker":        ticker,
-                "sector":        sector,
-                "price":         price,
-                "pe":            round(pe, 1)  if pe  else None,
-                "pb":            round(pb, 2)  if pb  else None,
-                "eps":           eps,
-                "beta":          round(beta, 2),
-                "wacc":          round(w * 100, 1),
-                "de":            round(de, 1)  if de  else None,
-                "roe":           round(roe * 100, 1) if roe else None,
-                "div_yield":     round(div * 100, 2),
-                "g_base_pct":    round(g_base * 100, 1),
-                "graham_value":  gv,
-                "graham_mos":    mos(gv),
-                "dcf_bear":      dcf_bear,
-                "dcf_base":      dcf_base,
-                "dcf_bull":      dcf_bull,
-                "dcf_bear_mos":  mos(dcf_bear),
-                "dcf_base_mos":  mos(dcf_base),
-                "dcf_bull_mos":  mos(dcf_bull),
-                "net_cash_ps":   net_cash_ps,
-                "high52":        info.get("fiftyTwoWeekHigh"),
-                "low52":         info.get("fiftyTwoWeekLow"),
+                "ticker":         ticker,
+                "sector":         sector,
+                "price":          price,
+                "pe":             round(pe, 1)       if pe   else None,
+                "pb":             round(pb, 2)       if pb   else None,
+                "eps":            eps,
+                "beta":           round(beta, 2),
+                "wacc":           round(w * 100, 1),
+                "de":             round(de, 1)       if de   else None,
+                "roe":            round(roe * 100, 1) if roe else None,
+                "div_yield":      round(div * 100, 2),
+                "g_base_pct":     round(g_base * 100, 1),
+                "graham_value":   gv,
+                "graham_mos":     mos(gv),
+                "dcf_bear":       dcf_bear,
+                "dcf_base":       dcf_base,
+                "dcf_bull":       dcf_bull,
+                "dcf_bear_mos":   mos(dcf_bear),
+                "dcf_base_mos":   mos(dcf_base),
+                "dcf_bull_mos":   mos(dcf_bull),
+                "net_cash_ps":    net_cash_ps,
+                "high52":         info.get("fiftyTwoWeekHigh"),
+                "low52":          info.get("fiftyTwoWeekLow"),
                 "analyst_target": info.get("targetMeanPrice"),
-                "sparkline":     get_sparkline(ticker),
-                "risk":          risk_score(pe, pb, beta, de, sector),
+                "sparkline":      get_sparkline(ticker),
+                "risk":           risk_score(pe, pb, beta, de, sector),
             }
 
         except Exception as e:
             print(f"Attempt {attempt+1} failed for {ticker}: {e}")
             if attempt < retries - 1:
-                time.sleep(random.uniform(5, 10))
+                time.sleep(random.uniform(10, 20))
 
     print(f"All retries failed for {ticker}")
     return None
@@ -201,17 +211,20 @@ def send_email(html_body):
 if __name__ == "__main__":
     import datetime
     # week_number = datetime.date.today().isocalendar()[1]
-    #if week_number % 2 != 0:
-     #   print(f"Week {week_number} — skipping (odd week)")
-      #  exit(0)
-    #print(f"Week {week_number} — running screener...")
+    # if week_number % 2 != 0:
+    #     print(f"Week {week_number} — skipping (odd week)")
+    #     exit(0)
+    # print(f"Week {week_number} — running screener...")
+
+    print("Starting screener...")
+    time.sleep(30)
 
     results = []
     for ticker in WATCHLIST["ticker"]:
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(random.uniform(3, 6))
+        time.sleep(random.uniform(8, 15))
 
     valid = [r for r in results if r]
     if not valid:
