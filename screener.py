@@ -1,26 +1,16 @@
-import yfinance as yf
 import pandas as pd
-import math, os, smtplib, json, time, random
-import requests
+import os, smtplib, json, time, random, requests, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
+FMP_KEY   = os.environ.get("FMP_API_KEY", "")
 
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
-
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-})
 
 SECTOR_RISK = {
     "Technology":             {"macro": "low",    "sector": "medium"},
@@ -35,6 +25,13 @@ SECTOR_RISK = {
     "Real Estate":            {"macro": "high",   "sector": "medium"},
     "Utilities":              {"macro": "low",    "sector": "low"},
 }
+
+def fmp_get(endpoint, params={}):
+    url    = f"https://financialmodelingprep.com/api/v3/{endpoint}"
+    params = {**params, "apikey": FMP_KEY}
+    r      = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
 
 def wacc(beta):
     return RISK_FREE_RATE + beta * ERP
@@ -81,93 +78,94 @@ def risk_score(pe, pb, beta, de, sector):
         "overall":   overall,
     }
 
-def get_sparkline(ticker, period="1y"):
+def get_sparkline(ticker):
     try:
-        hist   = yf.Ticker(ticker, session=session).history(period=period, interval="1wk")
-        prices = hist["Close"].dropna().tolist()
+        data   = fmp_get(f"historical-price-full/{ticker}", {"serietype": "line", "timeseries": 52})
+        prices = [d["close"] for d in reversed(data.get("historical", []))]
         return [round(p, 2) for p in prices[-52:]]
     except:
         return []
 
-def screen_ticker(ticker, retries=3):
-    for attempt in range(retries):
+def screen_ticker(ticker):
+    try:
+        # Quote
+        quote = fmp_get(f"quote/{ticker}")[0]
+        # Key stats
+        stats = fmp_get(f"key-metrics-ttm/{ticker}")[0]
+        # Profile
+        prof  = fmp_get(f"profile/{ticker}")[0]
+        # Growth
         try:
-            t    = yf.Ticker(ticker, session=session)
-            info = t.info
+            growth = fmp_get(f"financial-growth/{ticker}", {"limit": 1})[0]
+            g_est  = growth.get("epsgrowth") or growth.get("revenueGrowth") or 0.08
+        except:
+            g_est = 0.08
 
-            if not info or (not info.get("currentPrice") and not info.get("regularMarketPrice")):
-                raise ValueError("Empty response from Yahoo")
+        price  = quote.get("price")
+        pe     = quote.get("pe")
+        pb     = stats.get("pbRatioTTM")
+        eps    = quote.get("eps")
+        beta   = prof.get("beta") or 1.0
+        de     = stats.get("debtToEquityTTM")
+        roe    = stats.get("roeTTM")
+        div    = quote.get("dividendYield") or 0
+        sector = prof.get("sector", "Unknown")
+        fcf    = stats.get("freeCashFlowPerShareTTM")
+        shares = prof.get("sharesOutstanding") or 1
+        target = stats.get("analystTargetPrice") or prof.get("targetPrice")
+        high52 = quote.get("yearHigh")
+        low52  = quote.get("yearLow")
 
-            price  = info.get("currentPrice") or info.get("regularMarketPrice")
-            pe     = info.get("trailingPE")
-            pb     = info.get("priceToBook")
-            eps    = info.get("trailingEps")
-            beta   = info.get("beta") or 1.0
-            de     = info.get("debtToEquity")
-            roe    = info.get("returnOnEquity")
-            div    = info.get("dividendYield") or 0
-            sector = info.get("sector", "Unknown")
-            fcf    = info.get("freeCashflow")
-            shares = info.get("sharesOutstanding") or 1
-            g_est  = info.get("earningsGrowth") or info.get("revenueGrowth") or 0.08
+        if not price:
+            raise ValueError("No price data")
 
-            fcf_ps = fcf / shares if fcf else None
-            w      = wacc(beta)
+        w      = wacc(beta)
+        g_base = max(0.02, min(float(g_est), 0.25))
+        g_bear = max(0.01, g_base - 0.06)
+        g_bull = min(0.35, g_base + 0.08)
 
-            g_base = max(0.02, min(g_est, 0.25))
-            g_bear = max(0.01, g_base - 0.06)
-            g_bull = min(0.35, g_base + 0.08)
+        dcf_base = dcf_value(fcf, g_base, w)
+        dcf_bear = dcf_value(fcf, g_bear, w + 0.015)
+        dcf_bull = dcf_value(fcf, g_bull, w - 0.010)
+        gv       = graham_value(eps, g_base * 100)
 
-            dcf_base = dcf_value(fcf_ps, g_base, w)
-            dcf_bear = dcf_value(fcf_ps, g_bear, w + 0.015)
-            dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
-            gv       = graham_value(eps, g_base * 100)
+        def mos(val):
+            if val and price and price > 0:
+                return round((val - price) / price * 100, 1)
+            return None
 
-            cash        = info.get("totalCash") or 0
-            debt        = info.get("totalDebt") or 0
-            net_cash_ps = round((cash - debt) / shares, 2) if shares else 0
+        return {
+            "ticker":         ticker,
+            "sector":         sector,
+            "price":          price,
+            "pe":             round(pe, 1)        if pe   else None,
+            "pb":             round(pb, 2)        if pb   else None,
+            "eps":            eps,
+            "beta":           round(float(beta), 2),
+            "wacc":           round(w * 100, 1),
+            "de":             round(float(de), 1) if de   else None,
+            "roe":            round(float(roe) * 100, 1) if roe else None,
+            "div_yield":      round(float(div) * 100, 2),
+            "g_base_pct":     round(g_base * 100, 1),
+            "graham_value":   gv,
+            "graham_mos":     mos(gv),
+            "dcf_bear":       dcf_bear,
+            "dcf_base":       dcf_base,
+            "dcf_bull":       dcf_bull,
+            "dcf_bear_mos":   mos(dcf_bear),
+            "dcf_base_mos":   mos(dcf_base),
+            "dcf_bull_mos":   mos(dcf_bull),
+            "net_cash_ps":    0,
+            "high52":         high52,
+            "low52":          low52,
+            "analyst_target": target,
+            "sparkline":      get_sparkline(ticker),
+            "risk":           risk_score(pe, pb, beta, de, sector),
+        }
 
-            def mos(val):
-                if val and price and price > 0:
-                    return round((val - price) / price * 100, 1)
-                return None
-
-            return {
-                "ticker":         ticker,
-                "sector":         sector,
-                "price":          price,
-                "pe":             round(pe, 1)       if pe   else None,
-                "pb":             round(pb, 2)       if pb   else None,
-                "eps":            eps,
-                "beta":           round(beta, 2),
-                "wacc":           round(w * 100, 1),
-                "de":             round(de, 1)       if de   else None,
-                "roe":            round(roe * 100, 1) if roe else None,
-                "div_yield":      round(div * 100, 2),
-                "g_base_pct":     round(g_base * 100, 1),
-                "graham_value":   gv,
-                "graham_mos":     mos(gv),
-                "dcf_bear":       dcf_bear,
-                "dcf_base":       dcf_base,
-                "dcf_bull":       dcf_bull,
-                "dcf_bear_mos":   mos(dcf_bear),
-                "dcf_base_mos":   mos(dcf_base),
-                "dcf_bull_mos":   mos(dcf_bull),
-                "net_cash_ps":    net_cash_ps,
-                "high52":         info.get("fiftyTwoWeekHigh"),
-                "low52":          info.get("fiftyTwoWeekLow"),
-                "analyst_target": info.get("targetMeanPrice"),
-                "sparkline":      get_sparkline(ticker),
-                "risk":           risk_score(pe, pb, beta, de, sector),
-            }
-
-        except Exception as e:
-            print(f"Attempt {attempt+1} failed for {ticker}: {e}")
-            if attempt < retries - 1:
-                time.sleep(random.uniform(10, 20))
-
-    print(f"All retries failed for {ticker}")
-    return None
+    except Exception as e:
+        print(f"Error {ticker}: {e}")
+        return None
 
 def apply_filters(df):
     if df.empty or "pe" not in df.columns:
@@ -209,22 +207,19 @@ def send_email(html_body):
     print("Email sent!")
 
 if __name__ == "__main__":
-    import datetime
     # week_number = datetime.date.today().isocalendar()[1]
     # if week_number % 2 != 0:
     #     print(f"Week {week_number} — skipping (odd week)")
     #     exit(0)
-    # print(f"Week {week_number} — running screener...")
 
-    print("Starting screener...")
-    time.sleep(30)
+    print("Starting screener with FMP API...")
 
     results = []
     for ticker in WATCHLIST["ticker"]:
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(random.uniform(8, 15))
+        time.sleep(random.uniform(1, 2))
 
     valid = [r for r in results if r]
     if not valid:
@@ -233,6 +228,7 @@ if __name__ == "__main__":
 
     df        = pd.DataFrame(valid)
     shortlist = apply_filters(df)
+    print(f"Shortlist: {len(shortlist)} stocks")
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
