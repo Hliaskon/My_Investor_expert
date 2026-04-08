@@ -200,11 +200,11 @@ def send_email(html_body):
 
 if __name__ == "__main__":
     import datetime
-    week_number = datetime.date.today().isocalendar()[1]
-    if week_number % 2 != 0:
-        print(f"Week {week_number} — skipping (odd week)")
-        exit(0)
-    print(f"Week {week_number} — running screener...")
+    # week_number = datetime.date.today().isocalendar()[1]
+    #if week_number % 2 != 0:
+     #   print(f"Week {week_number} — skipping (odd week)")
+      #  exit(0)
+    #print(f"Week {week_number} — running screener...")
 
     results = []
     for ticker in WATCHLIST["ticker"]:
