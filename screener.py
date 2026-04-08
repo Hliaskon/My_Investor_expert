@@ -4,9 +4,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
 
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
-FMP_KEY   = os.environ.get("FMP_API_KEY", "")
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+WATCHLIST  = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
+ALPHA_KEY  = os.environ.get("ALPHA_KEY", "")
 
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
@@ -26,14 +26,14 @@ SECTOR_RISK = {
     "Utilities":              {"macro": "low",    "sector": "low"},
 }
 
-def fmp_get(endpoint, params={}):
-    url    = f"https://financialmodelingprep.com/api/v3/{endpoint}"
-    params = {**params, "apikey": FMP_KEY}
+def alpha_get(function, symbol, extra={}):
+    url    = "https://www.alphavantage.co/query"
+    params = {"function": function, "symbol": symbol, "apikey": ALPHA_KEY, **extra}
     r      = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
-    if isinstance(data, dict) and data.get("Error Message"):
-        raise ValueError(data["Error Message"])
+    if "Error Message" in data or "Note" in data:
+        raise ValueError(data.get("Error Message") or data.get("Note"))
     return data
 
 def wacc(beta):
@@ -83,57 +83,51 @@ def risk_score(pe, pb, beta, de, sector):
 
 def get_sparkline(ticker):
     try:
-        data   = fmp_get(f"historical-price-full/{ticker}", {"timeseries": "52"})
-        prices = [d["close"] for d in reversed(data.get("historical", []))]
-        return [round(p, 2) for p in prices[-52:]]
+        data   = alpha_get("TIME_SERIES_WEEKLY", ticker)
+        weekly = data.get("Weekly Time Series", {})
+        prices = [float(v["4. close"]) for v in list(weekly.values())[:52]]
+        return [round(p, 2) for p in reversed(prices)]
     except:
         return []
 
 def screen_ticker(ticker):
     try:
-        prof_data = fmp_get(f"profile/{ticker}")
-        if not prof_data:
-            raise ValueError("Empty profile")
-        prof = prof_data[0]
+        # Overview — περιέχει PE, PB, EPS, Beta, sector κλπ
+        ov = alpha_get("OVERVIEW", ticker)
+        if not ov or not ov.get("Symbol"):
+            raise ValueError("Empty overview")
 
-        try:
-            ratios = fmp_get(f"ratios-ttm/{ticker}")[0]
-        except:
-            ratios = {}
-
-        try:
-            growth = fmp_get(f"financial-growth/{ticker}", {"limit": 1})[0]
-            g_est  = growth.get("epsgrowth") or growth.get("revenueGrowth") or 0.08
-        except:
-            g_est = 0.08
-
-        price  = prof.get("price")
-        pe     = prof.get("pe")
-        pb     = ratios.get("priceToBookRatioTTM") or prof.get("priceToBook")
-        eps    = prof.get("eps")
-        beta   = prof.get("beta") or 1.0
-        de     = ratios.get("debtEquityRatioTTM")
-        roe    = ratios.get("returnOnEquityTTM")
-        div    = prof.get("lastDiv") or 0
-        sector = prof.get("sector", "Unknown")
-        fcf    = ratios.get("freeCashFlowPerShareTTM")
-        target = prof.get("dcf")
-        high52 = prof.get("range", "").split("-")[-1] if prof.get("range") else None
-        low52  = prof.get("range", "").split("-")[0]  if prof.get("range") else None
-
+        # Quote για τρέχουσα τιμή
+        q    = alpha_get("GLOBAL_QUOTE", ticker)
+        gq   = q.get("Global Quote", {})
+        price = float(gq.get("05. price", 0)) or None
         if not price:
-            raise ValueError("No price data")
+            raise ValueError("No price")
 
-        div_yield = (div / price * 100) if price and div else 0
+        pe     = float(ov.get("TrailingPE",      0) or 0) or None
+        pb     = float(ov.get("PriceToBookRatio",0) or 0) or None
+        eps    = float(ov.get("EPS",             0) or 0) or None
+        beta   = float(ov.get("Beta",            1) or 1)
+        de     = float(ov.get("DebtToEquityRatio", 0) or 0) or None
+        roe    = float(ov.get("ReturnOnEquityTTM", 0) or 0) or None
+        div    = float(ov.get("DividendYield",   0) or 0)
+        sector = ov.get("Sector", "Unknown")
+        target = float(ov.get("AnalystTargetPrice", 0) or 0) or None
+        high52 = ov.get("52WeekHigh")
+        low52  = ov.get("52WeekLow")
+        g_est  = float(ov.get("QuarterlyEarningsGrowthYOY", 0.08) or 0.08)
 
-        w      = wacc(float(beta))
-        g_base = max(0.02, min(float(g_est), 0.25))
+        # FCF από income/cashflow — χρησιμοποιούμε EPS ως proxy
+        fcf_ps = eps * 0.7 if eps else None
+
+        w      = wacc(beta)
+        g_base = max(0.02, min(abs(g_est), 0.25))
         g_bear = max(0.01, g_base - 0.06)
-        g_bull = min(0.35, g_base + 0.08)
+        g_bull = min(0.35,  g_base + 0.08)
 
-        dcf_base = dcf_value(fcf, g_base, w)
-        dcf_bear = dcf_value(fcf, g_bear, w + 0.015)
-        dcf_bull = dcf_value(fcf, g_bull, w - 0.010)
+        dcf_base = dcf_value(fcf_ps, g_base, w)
+        dcf_bear = dcf_value(fcf_ps, g_bear, w + 0.015)
+        dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
         gv       = graham_value(eps, g_base * 100)
 
         def mos(val):
@@ -145,14 +139,14 @@ def screen_ticker(ticker):
             "ticker":         ticker,
             "sector":         sector,
             "price":          price,
-            "pe":             round(float(pe), 1)        if pe   else None,
-            "pb":             round(float(pb), 2)        if pb   else None,
+            "pe":             round(pe, 1)        if pe   else None,
+            "pb":             round(pb, 2)        if pb   else None,
             "eps":            eps,
-            "beta":           round(float(beta), 2),
+            "beta":           round(beta, 2),
             "wacc":           round(w * 100, 1),
-            "de":             round(float(de), 1)        if de   else None,
-            "roe":            round(float(roe) * 100, 1) if roe  else None,
-            "div_yield":      round(div_yield, 2),
+            "de":             round(de, 1)        if de   else None,
+            "roe":            round(roe * 100, 1) if roe  else None,
+            "div_yield":      round(div * 100, 2),
             "g_base_pct":     round(g_base * 100, 1),
             "graham_value":   gv,
             "graham_mos":     mos(gv),
@@ -219,14 +213,18 @@ if __name__ == "__main__":
     #     print(f"Week {week_number} — skipping (odd week)")
     #     exit(0)
 
-    print("Starting screener with FMP API...")
+    print("Starting screener with Alpha Vantage...")
 
     results = []
     for ticker in WATCHLIST["ticker"]:
+        # Παράλειψε European tickers — Alpha Vantage δεν υποστηρίζει .PA
+        if "." in ticker:
+            print(f"Skipping {ticker} (not supported by Alpha Vantage)")
+            continue
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(random.uniform(1, 2))
+        time.sleep(15)  # Alpha Vantage free: 5 req/min → 15s delay
 
     valid = [r for r in results if r]
     if not valid:
