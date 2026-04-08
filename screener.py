@@ -4,8 +4,10 @@ import math, os, smtplib, json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
+import os
 
-WATCHLIST = pd.read_csv("watchlist.csv")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WATCHLIST = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
 
 RISK_FREE_RATE = 0.042   # 10Y Treasury
 ERP            = 0.055   # Equity Risk Premium
