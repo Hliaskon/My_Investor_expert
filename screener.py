@@ -1,5 +1,5 @@
 import pandas as pd
-import os, smtplib, json, time, random, requests, datetime
+import os, smtplib, time, random, requests, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
@@ -31,7 +31,10 @@ def fmp_get(endpoint, params={}):
     params = {**params, "apikey": FMP_KEY}
     r      = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+    if isinstance(data, dict) and data.get("Error Message"):
+        raise ValueError(data["Error Message"])
+    return data
 
 def wacc(beta):
     return RISK_FREE_RATE + beta * ERP
@@ -80,7 +83,7 @@ def risk_score(pe, pb, beta, de, sector):
 
 def get_sparkline(ticker):
     try:
-        data   = fmp_get(f"historical-price-full/{ticker}", {"serietype": "line", "timeseries": 52})
+        data   = fmp_get(f"historical-price-full/{ticker}", {"timeseries": "52"})
         prices = [d["close"] for d in reversed(data.get("historical", []))]
         return [round(p, 2) for p in prices[-52:]]
     except:
@@ -88,38 +91,42 @@ def get_sparkline(ticker):
 
 def screen_ticker(ticker):
     try:
-        # Quote
-        quote = fmp_get(f"quote/{ticker}")[0]
-        # Key stats
-        stats = fmp_get(f"key-metrics-ttm/{ticker}")[0]
-        # Profile
-        prof  = fmp_get(f"profile/{ticker}")[0]
-        # Growth
+        prof_data = fmp_get(f"profile/{ticker}")
+        if not prof_data:
+            raise ValueError("Empty profile")
+        prof = prof_data[0]
+
+        try:
+            ratios = fmp_get(f"ratios-ttm/{ticker}")[0]
+        except:
+            ratios = {}
+
         try:
             growth = fmp_get(f"financial-growth/{ticker}", {"limit": 1})[0]
             g_est  = growth.get("epsgrowth") or growth.get("revenueGrowth") or 0.08
         except:
             g_est = 0.08
 
-        price  = quote.get("price")
-        pe     = quote.get("pe")
-        pb     = stats.get("pbRatioTTM")
-        eps    = quote.get("eps")
+        price  = prof.get("price")
+        pe     = prof.get("pe")
+        pb     = ratios.get("priceToBookRatioTTM") or prof.get("priceToBook")
+        eps    = prof.get("eps")
         beta   = prof.get("beta") or 1.0
-        de     = stats.get("debtToEquityTTM")
-        roe    = stats.get("roeTTM")
-        div    = quote.get("dividendYield") or 0
+        de     = ratios.get("debtEquityRatioTTM")
+        roe    = ratios.get("returnOnEquityTTM")
+        div    = prof.get("lastDiv") or 0
         sector = prof.get("sector", "Unknown")
-        fcf    = stats.get("freeCashFlowPerShareTTM")
-        shares = prof.get("sharesOutstanding") or 1
-        target = stats.get("analystTargetPrice") or prof.get("targetPrice")
-        high52 = quote.get("yearHigh")
-        low52  = quote.get("yearLow")
+        fcf    = ratios.get("freeCashFlowPerShareTTM")
+        target = prof.get("dcf")
+        high52 = prof.get("range", "").split("-")[-1] if prof.get("range") else None
+        low52  = prof.get("range", "").split("-")[0]  if prof.get("range") else None
 
         if not price:
             raise ValueError("No price data")
 
-        w      = wacc(beta)
+        div_yield = (div / price * 100) if price and div else 0
+
+        w      = wacc(float(beta))
         g_base = max(0.02, min(float(g_est), 0.25))
         g_bear = max(0.01, g_base - 0.06)
         g_bull = min(0.35, g_base + 0.08)
@@ -138,14 +145,14 @@ def screen_ticker(ticker):
             "ticker":         ticker,
             "sector":         sector,
             "price":          price,
-            "pe":             round(pe, 1)        if pe   else None,
-            "pb":             round(pb, 2)        if pb   else None,
+            "pe":             round(float(pe), 1)        if pe   else None,
+            "pb":             round(float(pb), 2)        if pb   else None,
             "eps":            eps,
             "beta":           round(float(beta), 2),
             "wacc":           round(w * 100, 1),
-            "de":             round(float(de), 1) if de   else None,
-            "roe":            round(float(roe) * 100, 1) if roe else None,
-            "div_yield":      round(float(div) * 100, 2),
+            "de":             round(float(de), 1)        if de   else None,
+            "roe":            round(float(roe) * 100, 1) if roe  else None,
+            "div_yield":      round(div_yield, 2),
             "g_base_pct":     round(g_base * 100, 1),
             "graham_value":   gv,
             "graham_mos":     mos(gv),
