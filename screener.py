@@ -100,7 +100,14 @@ def screen_ticker(ticker):
         # Quote για τρέχουσα τιμή
         q    = alpha_get("GLOBAL_QUOTE", ticker)
         gq   = q.get("Global Quote", {})
-        price = float(gq.get("05. price", 0)) or None
+        price = None
+            for k, v in gq.items():
+                if "price" in k.lower():
+                    try:
+                        price = float(v)
+                    except:
+                        pass
+                    break
         if not price:
             raise ValueError("No price")
 
