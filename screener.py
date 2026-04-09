@@ -12,6 +12,8 @@ RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
 
+BATCH_SIZE = 24  # Alpha Vantage free: 25 calls/day, 1 call/ticker + 1 buffer
+
 SECTOR_RISK = {
     "Technology":             {"macro": "low",    "sector": "medium"},
     "Communication Services": {"macro": "low",    "sector": "medium"},
@@ -82,93 +84,36 @@ def safe_float(val, default=0):
 
 def screen_ticker(ticker):
     try:
-        # Call 1: OVERVIEW
+        # Μόνο 1 call: OVERVIEW περιέχει όλα τα βασικά metrics
         ov = alpha_get("OVERVIEW", ticker)
         if not ov or not ov.get("Symbol"):
             raise ValueError("Empty overview")
-        time.sleep(13)
 
-        # Call 2: GLOBAL_QUOTE
-        q   = alpha_get("GLOBAL_QUOTE", ticker)
-        gq  = q.get("Global Quote", {})
+        pe        = safe_float(ov.get("TrailingPE"))         or None
+        pb        = safe_float(ov.get("PriceToBookRatio"))   or None
+        eps       = safe_float(ov.get("EPS"))                or None
+        beta      = safe_float(ov.get("Beta"), 1)            or 1.0
+        de        = safe_float(ov.get("DebtToEquityRatio"))  or None
+        roe       = safe_float(ov.get("ReturnOnEquityTTM"))  or None
+        div       = safe_float(ov.get("DividendYield"))
+        sector    = ov.get("Sector", "Unknown")
+        target    = safe_float(ov.get("AnalystTargetPrice")) or None
+        high52    = ov.get("52WeekHigh")
+        low52     = ov.get("52WeekLow")
+        g_est     = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
+        ev_ebitda = safe_float(ov.get("EVToEBITDA"))         or None
+
+        # Price: EPS × TrailingPE (proxy — αρκεί για screening)
         price = None
-        for k, v in gq.items():
-            if "price" in k.lower():
-                try:
-                    price = float(v)
-                except Exception:
-                    pass
-                break
-
+        if eps and pe:
+            price = round(eps * pe, 2)
         if not price:
-            eps_ov = safe_float(ov.get("EPS"))
-            pe_ov  = safe_float(ov.get("TrailingPE"))
-            if eps_ov > 0 and pe_ov > 0:
-                price = round(eps_ov * pe_ov, 2)
-            else:
-                raise ValueError("No price available")
-        time.sleep(13)
-
-        # Call 3: INCOME_STATEMENT για R&D και EBITDA
-        rd_pct      = None
-        ebitda      = None
-        try:
-            inc  = alpha_get("INCOME_STATEMENT", ticker)
-            ann  = inc.get("annualReports", [{}])[0]
-            rd   = safe_float(ann.get("researchAndDevelopment"))
-            rev  = safe_float(ann.get("totalRevenue"))
-            ebitda = safe_float(ann.get("ebitda"))
-            if rd > 0 and rev > 0:
-                rd_pct = round(rd / rev * 100, 1)
-        except:
-            pass
-        time.sleep(13)
-
-        # Call 4: BALANCE_SHEET για EV/EBITDA και ROIC
-        ev_ebitda   = None
-        roic        = None
-        fcf_yield   = None
-        try:
-            bs       = alpha_get("BALANCE_SHEET", ticker)
-            bal      = bs.get("annualReports", [{}])[0]
-            total_debt    = safe_float(bal.get("shortLongTermDebtTotal")) or safe_float(bal.get("longTermDebt"))
-            cash          = safe_float(bal.get("cashAndCashEquivalentsAtCarryingValue"))
-            shares_out    = safe_float(ov.get("SharesOutstanding"))
-            market_cap    = price * shares_out if shares_out > 0 else 0
-            ev            = market_cap + total_debt - cash
-
-            if ebitda and ebitda > 0 and ev > 0:
-                ev_ebitda = round(ev / ebitda, 1)
-
-            # ROIC = NOPAT / Invested Capital
-            invested_cap  = safe_float(bal.get("totalShareholderEquity")) + total_debt - cash
-            op_income     = safe_float(bal.get("operatingIncome") or ov.get("OperatingIncomeTTM"))
-            tax_rate      = 0.21
-            nopat         = op_income * (1 - tax_rate)
-            if invested_cap > 0 and nopat > 0:
-                roic = round(nopat / invested_cap * 100, 1)
-
-            # FCF Yield = FCF / Market Cap
-            capex    = abs(safe_float(bal.get("capitalExpenditures")))
-            op_cf    = safe_float(bal.get("operatingCashflow"))
-            fcf      = op_cf - capex
-            if fcf > 0 and market_cap > 0:
-                fcf_yield = round(fcf / market_cap * 100, 1)
-        except:
-            pass
-
-        pe     = safe_float(ov.get("TrailingPE"))   or None
-        pb     = safe_float(ov.get("PriceToBookRatio")) or None
-        eps    = safe_float(ov.get("EPS"))           or None
-        beta   = safe_float(ov.get("Beta"), 1)       or 1.0
-        de     = safe_float(ov.get("DebtToEquityRatio")) or None
-        roe    = safe_float(ov.get("ReturnOnEquityTTM"))  or None
-        div    = safe_float(ov.get("DividendYield"))
-        sector = ov.get("Sector", "Unknown")
-        target = safe_float(ov.get("AnalystTargetPrice")) or None
-        high52 = ov.get("52WeekHigh")
-        low52  = ov.get("52WeekLow")
-        g_est  = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
+            # Fallback: 50day moving average
+            ma50 = safe_float(ov.get("50DayMovingAverage"))
+            if ma50 > 0:
+                price = ma50
+        if not price:
+            raise ValueError("No price available")
 
         w      = wacc(beta)
         g_base = max(0.02, min(abs(g_est), 0.25))
@@ -181,24 +126,11 @@ def screen_ticker(ticker):
         dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
         gv       = graham_value(eps, g_base * 100)
 
-        # ROIC vs WACC flag
         roic_vs_wacc = None
-        if roic is not None:
-            wacc_pct = round(w * 100, 1)
-            if roic > wacc_pct:
-                roic_vs_wacc = "positive"
-            else:
-                roic_vs_wacc = "negative"
-
-        # R&D flag
-        rd_flag = None
-        if rd_pct is not None:
-            if rd_pct < 3:
-                rd_flag = "low"
-            elif rd_pct < 12:
-                rd_flag = "medium"
-            else:
-                rd_flag = "high"
+        roic         = safe_float(ov.get("ReturnOnAssetsTTM")) or None
+        if roic:
+            roic = round(roic * 100, 1)
+            roic_vs_wacc = "positive" if roic > w * 100 else "negative"
 
         def mos(val):
             if val and price and price > 0:
@@ -232,17 +164,29 @@ def screen_ticker(ticker):
             "analyst_target": target,
             "sparkline":      [],
             "risk":           risk_score(pe, pb, beta, de, sector),
-            "ev_ebitda":      ev_ebitda,
+            "ev_ebitda":      round(ev_ebitda, 1) if ev_ebitda else None,
             "roic":           roic,
             "roic_vs_wacc":   roic_vs_wacc,
-            "fcf_yield":      fcf_yield,
-            "rd_pct":         rd_pct,
-            "rd_flag":        rd_flag,
+            "fcf_yield":      None,
+            "rd_pct":         None,
+            "rd_flag":        None,
         }
 
     except Exception as e:
         print(f"Error {ticker}: {e}")
         return None
+
+def get_batch(df, week_number):
+    """Επιλέγει batch βάσει εβδομάδας — rotation κάθε 5 εβδομάδες"""
+    tickers = df["ticker"].tolist()
+    total   = len(tickers)
+    n_batches = max(1, -(-total // BATCH_SIZE))  # ceiling division
+    batch_idx = (week_number - 1) % n_batches
+    start = batch_idx * BATCH_SIZE
+    end   = start + BATCH_SIZE
+    batch = tickers[start:end]
+    print(f"Week {week_number} → Batch {batch_idx + 1}/{n_batches}: {batch}")
+    return batch
 
 def apply_filters(df):
     if df.empty or "pe" not in df.columns:
@@ -254,28 +198,28 @@ def apply_filters(df):
     f = f[f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)]
     return f.sort_values("dcf_base_mos", ascending=False)
 
-def claude_summary(stocks_json):
+def claude_summary(stocks_json, batch_info):
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=700,
         messages=[{"role": "user", "content":
-            "Είσαι value investing assistant. Δεδομένο shortlist μετοχών (JSON) "
-            "με DCF Bear/Base/Bull scenarios, Risk Analysis, ROIC vs WACC, "
-            "EV/EBITDA, FCF Yield και R&D flag, γράψε 3 bullets στα ελληνικά. "
+            f"Είσαι value investing assistant. {batch_info}\n"
+            "Δεδομένο shortlist μετοχών (JSON) με DCF Bear/Base/Bull scenarios, "
+            "Risk Analysis, ROIC, EV/EBITDA, γράψε 3 bullets στα ελληνικά. "
             "Εστίασε: κορυφαία ευκαιρία βάσει risk-adjusted MoS, κάποια red flag, "
             "και macro context.\n\n" + stocks_json
         }]
     )
     return msg.content[0].text
 
-def send_email(html_body):
+def send_email(html_body, week_number, batch_idx, n_batches):
     sender   = os.environ["EMAIL_SENDER"]
     password = os.environ["EMAIL_PASSWORD"]
     receiver = os.environ["EMAIL_RECEIVER"]
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "📊 Weekly Stock Screener — DCF & Risk Report"
+    msg["Subject"] = f"📊 Stock Screener — Εβδομάδα {week_number} (Batch {batch_idx}/{n_batches})"
     msg["From"]    = sender
     msg["To"]      = receiver
     msg.attach(MIMEText(html_body, "html"))
@@ -285,26 +229,32 @@ def send_email(html_body):
     print("Email sent!")
 
 if __name__ == "__main__":
-    # week_number = datetime.date.today().isocalendar()[1]
-    # if week_number % 2 != 0:
-    #     print(f"Week {week_number} — skipping (odd week)")
-    #     exit(0)
+    today        = datetime.date.today()
+    week_number  = today.isocalendar()[1]
+    tickers_all  = WATCHLIST["ticker"].tolist()
+    total        = len(tickers_all)
+    n_batches    = max(1, -(-total // BATCH_SIZE))
+    batch_idx    = ((week_number - 1) % n_batches) + 1
+    batch        = get_batch(WATCHLIST, week_number)
 
-    print("Starting screener with Alpha Vantage...")
+    batch_info = (f"Σήμερα: {today}. Αυτή είναι η εβδομάδα {week_number}, "
+                  f"batch {batch_idx}/{n_batches} ({len(batch)} μετοχές): {', '.join(batch)}.")
+
+    print(f"Starting screener — {batch_info}")
 
     results = []
-    for ticker in WATCHLIST["ticker"]:
+    for ticker in batch:
         if "." in ticker:
-            print(f"Skipping {ticker} (not supported)")
+            print(f"Skipping {ticker}")
             continue
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(14)
+        time.sleep(13)  # 25 calls/day = ~1 call/58s για ασφάλεια
 
     valid = [r for r in results if r]
     if not valid:
-        print("No valid data retrieved. Exiting.")
+        print("No valid data. Exiting.")
         exit(0)
 
     df        = pd.DataFrame(valid)
@@ -313,10 +263,10 @@ if __name__ == "__main__":
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
-        cols = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
-                "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
-                "roic","roic_vs_wacc","ev_ebitda","fcf_yield","rd_pct","rd_flag"]
-        summary = claude_summary(shortlist[cols].to_json(orient="records"))
+        cols    = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
+                   "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
+                   "roic","roic_vs_wacc","ev_ebitda"]
+        summary = claude_summary(shortlist[cols].to_json(orient="records"), batch_info)
 
     html = build_html(df, shortlist, summary)
-    send_email(html)
+    send_email(html, week_number, batch_idx, n_batches)
