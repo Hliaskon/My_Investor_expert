@@ -1,5 +1,5 @@
 import pandas as pd
-import os, smtplib, time, random, requests, datetime
+import os, smtplib, time, requests, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
@@ -74,6 +74,12 @@ def risk_score(pe, pb, beta, de, sector):
     overall = "low" if avg < 0.75 else ("high" if avg > 1.5 else "medium")
     return {"business": biz_risk, "valuation": val_risk, "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
 
+def safe_float(val, default=0):
+    try:
+        return float(val or default)
+    except:
+        return default
+
 def screen_ticker(ticker):
     try:
         # Call 1: OVERVIEW
@@ -85,8 +91,6 @@ def screen_ticker(ticker):
         # Call 2: GLOBAL_QUOTE
         q   = alpha_get("GLOBAL_QUOTE", ticker)
         gq  = q.get("Global Quote", {})
-        print(f"  GQ keys: {list(gq.keys())}")
-
         price = None
         for k, v in gq.items():
             if "price" in k.lower():
@@ -97,38 +101,104 @@ def screen_ticker(ticker):
                 break
 
         if not price:
-            # Fallback: EPS * PE από OVERVIEW
-            eps_ov = float(ov.get("EPS", 0) or 0)
-            pe_ov  = float(ov.get("TrailingPE", 0) or 0)
+            eps_ov = safe_float(ov.get("EPS"))
+            pe_ov  = safe_float(ov.get("TrailingPE"))
             if eps_ov > 0 and pe_ov > 0:
                 price = round(eps_ov * pe_ov, 2)
-                print(f"  Using fallback price: {price}")
             else:
                 raise ValueError("No price available")
+        time.sleep(13)
 
-        pe     = float(ov.get("TrailingPE",              0) or 0) or None
-        pb     = float(ov.get("PriceToBookRatio",         0) or 0) or None
-        eps    = float(ov.get("EPS",                      0) or 0) or None
-        beta   = float(ov.get("Beta",                     1) or 1)
-        de     = float(ov.get("DebtToEquityRatio",        0) or 0) or None
-        roe    = float(ov.get("ReturnOnEquityTTM",        0) or 0) or None
-        div    = float(ov.get("DividendYield",            0) or 0)
+        # Call 3: INCOME_STATEMENT για R&D και EBITDA
+        rd_pct      = None
+        ebitda      = None
+        try:
+            inc  = alpha_get("INCOME_STATEMENT", ticker)
+            ann  = inc.get("annualReports", [{}])[0]
+            rd   = safe_float(ann.get("researchAndDevelopment"))
+            rev  = safe_float(ann.get("totalRevenue"))
+            ebitda = safe_float(ann.get("ebitda"))
+            if rd > 0 and rev > 0:
+                rd_pct = round(rd / rev * 100, 1)
+        except:
+            pass
+        time.sleep(13)
+
+        # Call 4: BALANCE_SHEET για EV/EBITDA και ROIC
+        ev_ebitda   = None
+        roic        = None
+        fcf_yield   = None
+        try:
+            bs       = alpha_get("BALANCE_SHEET", ticker)
+            bal      = bs.get("annualReports", [{}])[0]
+            total_debt    = safe_float(bal.get("shortLongTermDebtTotal")) or safe_float(bal.get("longTermDebt"))
+            cash          = safe_float(bal.get("cashAndCashEquivalentsAtCarryingValue"))
+            shares_out    = safe_float(ov.get("SharesOutstanding"))
+            market_cap    = price * shares_out if shares_out > 0 else 0
+            ev            = market_cap + total_debt - cash
+
+            if ebitda and ebitda > 0 and ev > 0:
+                ev_ebitda = round(ev / ebitda, 1)
+
+            # ROIC = NOPAT / Invested Capital
+            invested_cap  = safe_float(bal.get("totalShareholderEquity")) + total_debt - cash
+            op_income     = safe_float(bal.get("operatingIncome") or ov.get("OperatingIncomeTTM"))
+            tax_rate      = 0.21
+            nopat         = op_income * (1 - tax_rate)
+            if invested_cap > 0 and nopat > 0:
+                roic = round(nopat / invested_cap * 100, 1)
+
+            # FCF Yield = FCF / Market Cap
+            capex    = abs(safe_float(bal.get("capitalExpenditures")))
+            op_cf    = safe_float(bal.get("operatingCashflow"))
+            fcf      = op_cf - capex
+            if fcf > 0 and market_cap > 0:
+                fcf_yield = round(fcf / market_cap * 100, 1)
+        except:
+            pass
+
+        pe     = safe_float(ov.get("TrailingPE"))   or None
+        pb     = safe_float(ov.get("PriceToBookRatio")) or None
+        eps    = safe_float(ov.get("EPS"))           or None
+        beta   = safe_float(ov.get("Beta"), 1)       or 1.0
+        de     = safe_float(ov.get("DebtToEquityRatio")) or None
+        roe    = safe_float(ov.get("ReturnOnEquityTTM"))  or None
+        div    = safe_float(ov.get("DividendYield"))
         sector = ov.get("Sector", "Unknown")
-        target = float(ov.get("AnalystTargetPrice",       0) or 0) or None
+        target = safe_float(ov.get("AnalystTargetPrice")) or None
         high52 = ov.get("52WeekHigh")
         low52  = ov.get("52WeekLow")
-        g_est  = float(ov.get("QuarterlyEarningsGrowthYOY", 0.08) or 0.08)
+        g_est  = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
 
-        fcf_ps = eps * 0.7 if eps else None
         w      = wacc(beta)
         g_base = max(0.02, min(abs(g_est), 0.25))
         g_bear = max(0.01, g_base - 0.06)
         g_bull = min(0.35, g_base + 0.08)
 
+        fcf_ps   = eps * 0.7 if eps else None
         dcf_base = dcf_value(fcf_ps, g_base, w)
         dcf_bear = dcf_value(fcf_ps, g_bear, w + 0.015)
         dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
         gv       = graham_value(eps, g_base * 100)
+
+        # ROIC vs WACC flag
+        roic_vs_wacc = None
+        if roic is not None:
+            wacc_pct = round(w * 100, 1)
+            if roic > wacc_pct:
+                roic_vs_wacc = "positive"
+            else:
+                roic_vs_wacc = "negative"
+
+        # R&D flag
+        rd_flag = None
+        if rd_pct is not None:
+            if rd_pct < 3:
+                rd_flag = "low"
+            elif rd_pct < 12:
+                rd_flag = "medium"
+            else:
+                rd_flag = "high"
 
         def mos(val):
             if val and price and price > 0:
@@ -162,6 +232,12 @@ def screen_ticker(ticker):
             "analyst_target": target,
             "sparkline":      [],
             "risk":           risk_score(pe, pb, beta, de, sector),
+            "ev_ebitda":      ev_ebitda,
+            "roic":           roic,
+            "roic_vs_wacc":   roic_vs_wacc,
+            "fcf_yield":      fcf_yield,
+            "rd_pct":         rd_pct,
+            "rd_flag":        rd_flag,
         }
 
     except Exception as e:
@@ -186,9 +262,10 @@ def claude_summary(stocks_json):
         max_tokens=700,
         messages=[{"role": "user", "content":
             "Είσαι value investing assistant. Δεδομένο shortlist μετοχών (JSON) "
-            "με DCF Bear/Base/Bull scenarios και Risk Analysis, γράψε 3 bullets "
-            "στα ελληνικά. Εστίασε: κορυφαία ευκαιρία βάσει risk-adjusted MoS, "
-            "κάποια red flag, και macro context.\n\n" + stocks_json
+            "με DCF Bear/Base/Bull scenarios, Risk Analysis, ROIC vs WACC, "
+            "EV/EBITDA, FCF Yield και R&D flag, γράψε 3 bullets στα ελληνικά. "
+            "Εστίασε: κορυφαία ευκαιρία βάσει risk-adjusted MoS, κάποια red flag, "
+            "και macro context.\n\n" + stocks_json
         }]
     )
     return msg.content[0].text
@@ -236,8 +313,9 @@ if __name__ == "__main__":
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
-        cols    = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
-                   "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk"]
+        cols = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
+                "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
+                "roic","roic_vs_wacc","ev_ebitda","fcf_yield","rd_pct","rd_flag"]
         summary = claude_summary(shortlist[cols].to_json(orient="records"))
 
     html = build_html(df, shortlist, summary)
