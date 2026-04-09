@@ -70,16 +70,9 @@ def risk_score(pe, pb, beta, de, sector):
     else:
         biz_risk = "medium"
     levels  = {"low": 0, "medium": 1, "high": 2}
-    avg     = (levels[val_risk] + levels[biz_risk] +
-               levels[sr["macro"]] + levels[sr["sector"]]) / 4
+    avg     = (levels[val_risk] + levels[biz_risk] + levels[sr["macro"]] + levels[sr["sector"]]) / 4
     overall = "low" if avg < 0.75 else ("high" if avg > 1.5 else "medium")
-    return {
-        "business":  biz_risk,
-        "valuation": val_risk,
-        "macro":     sr["macro"],
-        "sector":    sr["sector"],
-        "overall":   overall,
-    }
+    return {"business": biz_risk, "valuation": val_risk, "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
 
 def get_sparkline(ticker):
     try:
@@ -90,43 +83,41 @@ def get_sparkline(ticker):
     except:
         return []
 
+def get_price_from_quote(gq):
+    for k, v in gq.items():
+        if "price" in k.lower():
+            try:
+                return float(v)
+            except:
+                pass
+    return None
+
 def screen_ticker(ticker):
     try:
-        # Overview — περιέχει PE, PB, EPS, Beta, sector κλπ
         ov = alpha_get("OVERVIEW", ticker)
         if not ov or not ov.get("Symbol"):
             raise ValueError("Empty overview")
 
-        # Quote για τρέχουσα τιμή
-        q    = alpha_get("GLOBAL_QUOTE", ticker)
-        gq   = q.get("Global Quote", {})
-        price = None
-            for k, v in gq.items():
-                if "price" in k.lower():
-                    try:
-                        price = float(v)
-                    except:
-                        pass
-                    break
+        q     = alpha_get("GLOBAL_QUOTE", ticker)
+        gq    = q.get("Global Quote", {})
+        price = get_price_from_quote(gq)
         if not price:
             raise ValueError("No price")
 
-        pe     = float(ov.get("TrailingPE",      0) or 0) or None
-        pb     = float(ov.get("PriceToBookRatio",0) or 0) or None
-        eps    = float(ov.get("EPS",             0) or 0) or None
-        beta   = float(ov.get("Beta",            1) or 1)
-        de     = float(ov.get("DebtToEquityRatio", 0) or 0) or None
-        roe    = float(ov.get("ReturnOnEquityTTM", 0) or 0) or None
-        div    = float(ov.get("DividendYield",   0) or 0)
+        pe     = float(ov.get("TrailingPE",           0) or 0) or None
+        pb     = float(ov.get("PriceToBookRatio",      0) or 0) or None
+        eps    = float(ov.get("EPS",                   0) or 0) or None
+        beta   = float(ov.get("Beta",                  1) or 1)
+        de     = float(ov.get("DebtToEquityRatio",     0) or 0) or None
+        roe    = float(ov.get("ReturnOnEquityTTM",     0) or 0) or None
+        div    = float(ov.get("DividendYield",         0) or 0)
         sector = ov.get("Sector", "Unknown")
-        target = float(ov.get("AnalystTargetPrice", 0) or 0) or None
+        target = float(ov.get("AnalystTargetPrice",    0) or 0) or None
         high52 = ov.get("52WeekHigh")
         low52  = ov.get("52WeekLow")
         g_est  = float(ov.get("QuarterlyEarningsGrowthYOY", 0.08) or 0.08)
 
-        # FCF από income/cashflow — χρησιμοποιούμε EPS ως proxy
         fcf_ps = eps * 0.7 if eps else None
-
         w      = wacc(beta)
         g_base = max(0.02, min(abs(g_est), 0.25))
         g_bear = max(0.01, g_base - 0.06)
@@ -146,13 +137,13 @@ def screen_ticker(ticker):
             "ticker":         ticker,
             "sector":         sector,
             "price":          price,
-            "pe":             round(pe, 1)        if pe   else None,
-            "pb":             round(pb, 2)        if pb   else None,
+            "pe":             round(pe, 1)         if pe   else None,
+            "pb":             round(pb, 2)         if pb   else None,
             "eps":            eps,
             "beta":           round(beta, 2),
             "wacc":           round(w * 100, 1),
-            "de":             round(de, 1)        if de   else None,
-            "roe":            round(roe * 100, 1) if roe  else None,
+            "de":             round(de, 1)         if de   else None,
+            "roe":            round(roe * 100, 1)  if roe  else None,
             "div_yield":      round(div * 100, 2),
             "g_base_pct":     round(g_base * 100, 1),
             "graham_value":   gv,
@@ -224,14 +215,13 @@ if __name__ == "__main__":
 
     results = []
     for ticker in WATCHLIST["ticker"]:
-        # Παράλειψε European tickers — Alpha Vantage δεν υποστηρίζει .PA
         if "." in ticker:
-            print(f"Skipping {ticker} (not supported by Alpha Vantage)")
+            print(f"Skipping {ticker} (not supported)")
             continue
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(15)  # Alpha Vantage free: 5 req/min → 15s delay
+        time.sleep(15)
 
     valid = [r for r in results if r]
     if not valid:
