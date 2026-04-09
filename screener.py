@@ -74,45 +74,47 @@ def risk_score(pe, pb, beta, de, sector):
     overall = "low" if avg < 0.75 else ("high" if avg > 1.5 else "medium")
     return {"business": biz_risk, "valuation": val_risk, "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
 
-def get_sparkline(ticker):
-    try:
-        data   = alpha_get("TIME_SERIES_WEEKLY", ticker)
-        weekly = data.get("Weekly Time Series", {})
-        prices = [float(v["4. close"]) for v in list(weekly.values())[:52]]
-        return [round(p, 2) for p in reversed(prices)]
-    except:
-        return []
-
-def get_price_from_quote(gq):
-    for k, v in gq.items():
-        if "price" in k.lower():
-            try:
-                return float(v)
-            except:
-                pass
-    return None
-
 def screen_ticker(ticker):
     try:
+        # Call 1: OVERVIEW
         ov = alpha_get("OVERVIEW", ticker)
         if not ov or not ov.get("Symbol"):
             raise ValueError("Empty overview")
+        time.sleep(13)
 
-        q     = alpha_get("GLOBAL_QUOTE", ticker)
-        gq    = q.get("Global Quote", {})
-        price = get_price_from_quote(gq)
+        # Call 2: GLOBAL_QUOTE
+        q   = alpha_get("GLOBAL_QUOTE", ticker)
+        gq  = q.get("Global Quote", {})
+        print(f"  GQ keys: {list(gq.keys())}")
+
+        price = None
+        for k, v in gq.items():
+            if "price" in k.lower():
+                try:
+                    price = float(v)
+                except Exception:
+                    pass
+                break
+
         if not price:
-            raise ValueError("No price")
+            # Fallback: EPS * PE από OVERVIEW
+            eps_ov = float(ov.get("EPS", 0) or 0)
+            pe_ov  = float(ov.get("TrailingPE", 0) or 0)
+            if eps_ov > 0 and pe_ov > 0:
+                price = round(eps_ov * pe_ov, 2)
+                print(f"  Using fallback price: {price}")
+            else:
+                raise ValueError("No price available")
 
-        pe     = float(ov.get("TrailingPE",           0) or 0) or None
-        pb     = float(ov.get("PriceToBookRatio",      0) or 0) or None
-        eps    = float(ov.get("EPS",                   0) or 0) or None
-        beta   = float(ov.get("Beta",                  1) or 1)
-        de     = float(ov.get("DebtToEquityRatio",     0) or 0) or None
-        roe    = float(ov.get("ReturnOnEquityTTM",     0) or 0) or None
-        div    = float(ov.get("DividendYield",         0) or 0)
+        pe     = float(ov.get("TrailingPE",              0) or 0) or None
+        pb     = float(ov.get("PriceToBookRatio",         0) or 0) or None
+        eps    = float(ov.get("EPS",                      0) or 0) or None
+        beta   = float(ov.get("Beta",                     1) or 1)
+        de     = float(ov.get("DebtToEquityRatio",        0) or 0) or None
+        roe    = float(ov.get("ReturnOnEquityTTM",        0) or 0) or None
+        div    = float(ov.get("DividendYield",            0) or 0)
         sector = ov.get("Sector", "Unknown")
-        target = float(ov.get("AnalystTargetPrice",    0) or 0) or None
+        target = float(ov.get("AnalystTargetPrice",       0) or 0) or None
         high52 = ov.get("52WeekHigh")
         low52  = ov.get("52WeekLow")
         g_est  = float(ov.get("QuarterlyEarningsGrowthYOY", 0.08) or 0.08)
@@ -121,7 +123,7 @@ def screen_ticker(ticker):
         w      = wacc(beta)
         g_base = max(0.02, min(abs(g_est), 0.25))
         g_bear = max(0.01, g_base - 0.06)
-        g_bull = min(0.35,  g_base + 0.08)
+        g_bull = min(0.35, g_base + 0.08)
 
         dcf_base = dcf_value(fcf_ps, g_base, w)
         dcf_bear = dcf_value(fcf_ps, g_bear, w + 0.015)
@@ -137,13 +139,13 @@ def screen_ticker(ticker):
             "ticker":         ticker,
             "sector":         sector,
             "price":          price,
-            "pe":             round(pe, 1)         if pe   else None,
-            "pb":             round(pb, 2)         if pb   else None,
+            "pe":             round(pe, 1)        if pe   else None,
+            "pb":             round(pb, 2)        if pb   else None,
             "eps":            eps,
             "beta":           round(beta, 2),
             "wacc":           round(w * 100, 1),
-            "de":             round(de, 1)         if de   else None,
-            "roe":            round(roe * 100, 1)  if roe  else None,
+            "de":             round(de, 1)        if de   else None,
+            "roe":            round(roe * 100, 1) if roe  else None,
             "div_yield":      round(div * 100, 2),
             "g_base_pct":     round(g_base * 100, 1),
             "graham_value":   gv,
@@ -158,7 +160,7 @@ def screen_ticker(ticker):
             "high52":         high52,
             "low52":          low52,
             "analyst_target": target,
-            "sparkline":      get_sparkline(ticker),
+            "sparkline":      [],
             "risk":           risk_score(pe, pb, beta, de, sector),
         }
 
@@ -221,7 +223,7 @@ if __name__ == "__main__":
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(15)
+        time.sleep(14)
 
     valid = [r for r in results if r]
     if not valid:
