@@ -385,6 +385,36 @@ if __name__ == "__main__":
     shortlist = apply_filters(df)
     print(f"Shortlist: {len(shortlist)} stocks")
 
+    # Macro overlay — graceful fallback αν αποτύχει
+    macro_html    = ""
+    alignment_map = {}
+    if os.environ.get("FRED_API_KEY"):
+        try:
+            from fredapi import Fred
+            from macro_regime import (
+                get_macro_inputs, classify_regime, yield_curve_signal,
+                fear_liquidity_score, calculate_sector_pe,
+                evaluate_sector_valuation, check_stock_macro_alignment,
+                render_macro_html,
+            )
+            fred        = Fred(api_key=os.environ["FRED_API_KEY"])
+            macro_in    = get_macro_inputs(fred)
+            regime      = classify_regime(macro_in)
+            yield_sig   = yield_curve_signal(macro_in["yield_spread"])
+            fear        = fear_liquidity_score(macro_in)
+            sector_pe   = calculate_sector_pe(df)
+            sector_vals = evaluate_sector_valuation(sector_pe)
+            macro_html  = render_macro_html(macro_in, regime, yield_sig, fear, sector_vals)
+            # Alignment για κάθε shortlisted stock
+            for _, row in df.iterrows():
+                alignment_map[row["ticker"]] = check_stock_macro_alignment(row["sector"], regime)
+            print("Macro overlay: OK")
+        except Exception as e:
+            print(f"[MACRO WARNING] {e} — continuing without macro")
+            macro_html = "<p style='color:#888;font-size:12px;padding:10px'>⚠️ Macro data unavailable this week.</p>"
+    else:
+        print("FRED_API_KEY not set — skipping macro overlay")
+
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
         cols = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
@@ -395,5 +425,7 @@ if __name__ == "__main__":
             shortlist[cols].to_json(orient="records"), batch_info
         )
 
-    html = build_html(df, shortlist, summary)
+    html = build_html(df, shortlist, summary, macro_html=macro_html,
+                      alignment_map=alignment_map,
+                      batch_idx=batch_idx, n_batches=n_batches)
     send_email(html, week_number, batch_idx, n_batches)
