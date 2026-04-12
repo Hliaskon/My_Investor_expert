@@ -130,6 +130,10 @@ TEMPLATE = """
   </div>
 </div>
 
+{% if macro_html %}
+{{ macro_html }}
+{% endif %}
+
 {% if summary %}
 <div class="card">
   <div class="sec">Claude Summary</div>
@@ -154,6 +158,10 @@ TEMPLATE = """
         {{ risk_badge(r.risk.overall) }}
         {{ fragility_badge(r.fragility) }}
         {{ w52_badge(r.pct_from_low, r.w52_flag) }}
+        {% if alignment_map and r.ticker in alignment_map %}
+          {% set al = alignment_map[r.ticker] %}
+          <span style="background:{{ al.bg }};color:{{ al.color }};font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px" title="{{ al.detail }}">{{ al.label }}</span>
+        {% endif %}
       </div>
       <div style="font-size:15px;font-weight:700">${{ r.price }}</div>
     </div>
@@ -379,7 +387,9 @@ TEMPLATE = """
 </html>
 """
 
-def build_html(df_all, df_short, summary="", batch_idx=1, n_batches=5):
+def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None, batch_idx=1, n_batches=5):
+    if alignment_map is None:
+        alignment_map = {}
     env = Environment()
     env.globals["risk_badge"]      = risk_badge
     env.globals["mos_badge"]       = mos_badge
@@ -388,11 +398,13 @@ def build_html(df_all, df_short, summary="", batch_idx=1, n_batches=5):
     env.globals["roic_badge"]      = roic_badge
     t = env.from_string(TEMPLATE)
     return t.render(
-        date       = datetime.date.today().isoformat(),
-        total      = len(df_all),
-        batch_idx  = batch_idx,
-        n_batches  = n_batches,
-        shortlist  = df_short.to_dict("records") if not df_short.empty else [],
-        all_stocks = df_all.to_dict("records"),
-        summary    = summary,
+        date          = datetime.date.today().isoformat(),
+        total         = len(df_all),
+        batch_idx     = batch_idx,
+        n_batches     = n_batches,
+        shortlist     = df_short.to_dict("records") if not df_short.empty else [],
+        all_stocks    = df_all.to_dict("records"),
+        summary       = summary,
+        macro_html    = macro_html,
+        alignment_map = alignment_map,
     )
