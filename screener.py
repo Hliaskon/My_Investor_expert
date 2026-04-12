@@ -11,8 +11,7 @@ ALPHA_KEY  = os.environ.get("ALPHA_KEY", "")
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
-
-BATCH_SIZE = 24  # Alpha Vantage free: 25 calls/day, 1 call/ticker + 1 buffer
+BATCH_SIZE      = 24
 
 SECTOR_RISK = {
     "Technology":             {"macro": "low",    "sector": "medium"},
@@ -37,6 +36,12 @@ def alpha_get(function, symbol, extra={}):
     if "Error Message" in data or "Note" in data:
         raise ValueError(data.get("Error Message") or data.get("Note"))
     return data
+
+def safe_float(val, default=0):
+    try:
+        return float(val or default)
+    except:
+        return default
 
 def wacc(beta):
     return RISK_FREE_RATE + beta * ERP
@@ -72,46 +77,90 @@ def risk_score(pe, pb, beta, de, sector):
     else:
         biz_risk = "medium"
     levels  = {"low": 0, "medium": 1, "high": 2}
-    avg     = (levels[val_risk] + levels[biz_risk] + levels[sr["macro"]] + levels[sr["sector"]]) / 4
+    avg     = (levels[val_risk] + levels[biz_risk] +
+               levels[sr["macro"]] + levels[sr["sector"]]) / 4
     overall = "low" if avg < 0.75 else ("high" if avg > 1.5 else "medium")
-    return {"business": biz_risk, "valuation": val_risk, "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
+    return {
+        "business":  biz_risk,
+        "valuation": val_risk,
+        "macro":     sr["macro"],
+        "sector":    sr["sector"],
+        "overall":   overall,
+    }
 
-def safe_float(val, default=0):
+def calc_52w_proximity(price, low52, high52):
+    """
+    Πόσο % πάνω από το 52-week low είναι η τρέχουσα τιμή.
+    <15% = behavioral buying zone (αγορά υπεραντέδρασε)
+    15-30% = neutral
+    >30% = απομακρύνθηκε από low
+    """
     try:
-        return float(val or default)
+        low  = safe_float(low52)
+        high = safe_float(high52)
+        if low <= 0 or price <= 0:
+            return None, None
+        pct_from_low  = round((price - low) / low * 100, 1)
+        pct_from_high = round((high - price) / high * 100, 1)
+        if pct_from_low < 15:
+            flag = "near_low"      # Strong behavioral signal
+        elif pct_from_low < 30:
+            flag = "neutral"
+        else:
+            flag = "away_from_low"
+        return pct_from_low, flag
     except:
-        return default
+        return None, None
+
+def calc_fragility(de, current_ratio, beta):
+    """
+    Taleb-inspired fragility score.
+    Fragile = υψηλό χρέος + χαμηλή ρευστότητα + υψηλή μεταβλητότητα.
+    """
+    score = 0
+    if de and de > 2:
+        score += 2
+    elif de and de > 1:
+        score += 1
+    if beta and beta > 1.3:
+        score += 2
+    elif beta and beta > 1.0:
+        score += 1
+    if score <= 1:
+        return "antifragile"
+    elif score <= 3:
+        return "neutral"
+    else:
+        return "fragile"
 
 def screen_ticker(ticker):
     try:
-        # Μόνο 1 call: OVERVIEW περιέχει όλα τα βασικά metrics
         ov = alpha_get("OVERVIEW", ticker)
         if not ov or not ov.get("Symbol"):
             raise ValueError("Empty overview")
 
-        pe        = safe_float(ov.get("TrailingPE"))         or None
-        pb        = safe_float(ov.get("PriceToBookRatio"))   or None
-        eps       = safe_float(ov.get("EPS"))                or None
-        beta      = safe_float(ov.get("Beta"), 1)            or 1.0
-        de        = safe_float(ov.get("DebtToEquityRatio"))  or None
-        roe       = safe_float(ov.get("ReturnOnEquityTTM"))  or None
+        pe        = safe_float(ov.get("TrailingPE"))           or None
+        pb        = safe_float(ov.get("PriceToBookRatio"))     or None
+        eps       = safe_float(ov.get("EPS"))                  or None
+        beta      = safe_float(ov.get("Beta"), 1)              or 1.0
+        de        = safe_float(ov.get("DebtToEquityRatio"))    or None
+        roe       = safe_float(ov.get("ReturnOnEquityTTM"))    or None
         div       = safe_float(ov.get("DividendYield"))
         sector    = ov.get("Sector", "Unknown")
-        target    = safe_float(ov.get("AnalystTargetPrice")) or None
+        target    = safe_float(ov.get("AnalystTargetPrice"))   or None
         high52    = ov.get("52WeekHigh")
         low52     = ov.get("52WeekLow")
         g_est     = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
-        ev_ebitda = safe_float(ov.get("EVToEBITDA"))         or None
+        ev_ebitda = safe_float(ov.get("EVToEBITDA"))           or None
+        ma50      = safe_float(ov.get("50DayMovingAverage"))
+        shares    = safe_float(ov.get("SharesOutstanding"))
 
-        # Price: EPS × TrailingPE (proxy — αρκεί για screening)
+        # Price: EPS × PE fallback → 50DMA
         price = None
         if eps and pe:
-            price = round(eps * pe, 2)
-        if not price:
-            # Fallback: 50day moving average
-            ma50 = safe_float(ov.get("50DayMovingAverage"))
-            if ma50 > 0:
-                price = ma50
+            price = round(abs(eps) * abs(pe), 2)
+        if not price and ma50 > 0:
+            price = ma50
         if not price:
             raise ValueError("No price available")
 
@@ -120,56 +169,80 @@ def screen_ticker(ticker):
         g_bear = max(0.01, g_base - 0.06)
         g_bull = min(0.35, g_base + 0.08)
 
-        fcf_ps   = eps * 0.7 if eps else None
-        dcf_base = dcf_value(fcf_ps, g_base, w)
-        dcf_bear = dcf_value(fcf_ps, g_bear, w + 0.015)
-        dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
-        gv       = graham_value(eps, g_base * 100)
+        # Fat tail bear case (Taleb): extra -3% growth, +2% WACC
+        g_bear_fat = max(0.005, g_bear - 0.03)
 
+        fcf_ps       = eps * 0.7 if eps else None
+        dcf_base     = dcf_value(fcf_ps, g_base, w)
+        dcf_bear     = dcf_value(fcf_ps, g_bear_fat, w + 0.02)  # fat tail
+        dcf_bull     = dcf_value(fcf_ps, g_bull, w - 0.010)
+        gv           = graham_value(eps, g_base * 100)
+
+        # ROIC proxy (ROA × leverage)
+        roa  = safe_float(ov.get("ReturnOnAssetsTTM")) or None
+        roic = round(roa * 100, 1) if roa else None
         roic_vs_wacc = None
-        roic         = safe_float(ov.get("ReturnOnAssetsTTM")) or None
-        if roic:
-            roic = round(roic * 100, 1)
+        if roic is not None:
             roic_vs_wacc = "positive" if roic > w * 100 else "negative"
+
+        # 52-week proximity (behavioral)
+        pct_from_low, w52_flag = calc_52w_proximity(price, low52, high52)
+
+        # Fragility score (Taleb)
+        fragility = calc_fragility(de, None, beta)
+
+        # CAPE proxy: usar 10y avg EPS si disponible, sino trailing
+        # Alpha Vantage no da 10y EPS history en free tier
+        # Usamos trailing PE como proxy y lo marcamos
+        cape_proxy = pe  # proxy — no es CAPE real
 
         def mos(val):
             if val and price and price > 0:
                 return round((val - price) / price * 100, 1)
             return None
 
+        # Analyst upside
+        analyst_upside = None
+        if target and price:
+            analyst_upside = round((target - price) / price * 100, 1)
+
         return {
-            "ticker":         ticker,
-            "sector":         sector,
-            "price":          price,
-            "pe":             round(pe, 1)        if pe   else None,
-            "pb":             round(pb, 2)        if pb   else None,
-            "eps":            eps,
-            "beta":           round(beta, 2),
-            "wacc":           round(w * 100, 1),
-            "de":             round(de, 1)        if de   else None,
-            "roe":            round(roe * 100, 1) if roe  else None,
-            "div_yield":      round(div * 100, 2),
-            "g_base_pct":     round(g_base * 100, 1),
-            "graham_value":   gv,
-            "graham_mos":     mos(gv),
-            "dcf_bear":       dcf_bear,
-            "dcf_base":       dcf_base,
-            "dcf_bull":       dcf_bull,
-            "dcf_bear_mos":   mos(dcf_bear),
-            "dcf_base_mos":   mos(dcf_base),
-            "dcf_bull_mos":   mos(dcf_bull),
-            "net_cash_ps":    0,
-            "high52":         high52,
-            "low52":          low52,
-            "analyst_target": target,
-            "sparkline":      [],
-            "risk":           risk_score(pe, pb, beta, de, sector),
-            "ev_ebitda":      round(ev_ebitda, 1) if ev_ebitda else None,
-            "roic":           roic,
-            "roic_vs_wacc":   roic_vs_wacc,
-            "fcf_yield":      None,
-            "rd_pct":         None,
-            "rd_flag":        None,
+            "ticker":          ticker,
+            "sector":          sector,
+            "price":           price,
+            "pe":              round(pe, 1)         if pe    else None,
+            "pb":              round(pb, 2)         if pb    else None,
+            "eps":             eps,
+            "beta":            round(beta, 2),
+            "wacc":            round(w * 100, 1),
+            "de":              round(de, 1)         if de    else None,
+            "roe":             round(roe * 100, 1)  if roe   else None,
+            "div_yield":       round(div * 100, 2),
+            "g_base_pct":      round(g_base * 100, 1),
+            "graham_value":    gv,
+            "graham_mos":      mos(gv),
+            "dcf_bear":        dcf_bear,
+            "dcf_base":        dcf_base,
+            "dcf_bull":        dcf_bull,
+            "dcf_bear_mos":    mos(dcf_bear),
+            "dcf_base_mos":    mos(dcf_base),
+            "dcf_bull_mos":    mos(dcf_bull),
+            "high52":          high52,
+            "low52":           low52,
+            "pct_from_low":    pct_from_low,
+            "w52_flag":        w52_flag,
+            "analyst_target":  target,
+            "analyst_upside":  analyst_upside,
+            "sparkline":       [],
+            "risk":            risk_score(pe, pb, beta, de, sector),
+            "ev_ebitda":       round(ev_ebitda, 1) if ev_ebitda else None,
+            "roic":            roic,
+            "roic_vs_wacc":    roic_vs_wacc,
+            "fcf_yield":       None,
+            "rd_pct":          None,
+            "rd_flag":         None,
+            "fragility":       fragility,
+            "cape_proxy":      round(cape_proxy, 1) if cape_proxy else None,
         }
 
     except Exception as e:
@@ -177,16 +250,14 @@ def screen_ticker(ticker):
         return None
 
 def get_batch(df, week_number):
-    """Επιλέγει batch βάσει εβδομάδας — rotation κάθε 5 εβδομάδες"""
-    tickers = df["ticker"].tolist()
-    total   = len(tickers)
-    n_batches = max(1, -(-total // BATCH_SIZE))  # ceiling division
+    tickers   = df["ticker"].tolist()
+    total     = len(tickers)
+    n_batches = max(1, -(-total // BATCH_SIZE))
     batch_idx = (week_number - 1) % n_batches
-    start = batch_idx * BATCH_SIZE
-    end   = start + BATCH_SIZE
-    batch = tickers[start:end]
-    print(f"Week {week_number} → Batch {batch_idx + 1}/{n_batches}: {batch}")
-    return batch
+    start     = batch_idx * BATCH_SIZE
+    batch     = tickers[start:start + BATCH_SIZE]
+    print(f"Week {week_number} → Batch {batch_idx+1}/{n_batches}: {batch}")
+    return batch, batch_idx + 1, n_batches
 
 def apply_filters(df):
     if df.empty or "pe" not in df.columns:
@@ -206,10 +277,11 @@ def claude_summary(stocks_json, batch_info):
         max_tokens=700,
         messages=[{"role": "user", "content":
             f"Είσαι value investing assistant. {batch_info}\n"
-            "Δεδομένο shortlist μετοχών (JSON) με DCF Bear/Base/Bull scenarios, "
-            "Risk Analysis, ROIC, EV/EBITDA, γράψε 3 bullets στα ελληνικά. "
-            "Εστίασε: κορυφαία ευκαιρία βάσει risk-adjusted MoS, κάποια red flag, "
-            "και macro context.\n\n" + stocks_json
+            "Δεδομένο shortlist μετοχών (JSON) με DCF Bear/Base/Bull, Risk, "
+            "ROIC vs WACC, EV/EBITDA, 52w low proximity, fragility score, "
+            "γράψε 3 bullets στα ελληνικά. Εστίασε: κορυφαία ευκαιρία "
+            "βάσει risk-adjusted MoS, κάποια red flag, macro context.\n\n"
+            + stocks_json
         }]
     )
     return msg.content[0].text
@@ -229,15 +301,11 @@ def send_email(html_body, week_number, batch_idx, n_batches):
     print("Email sent!")
 
 if __name__ == "__main__":
-    today        = datetime.date.today()
-    week_number  = today.isocalendar()[1]
-    tickers_all  = WATCHLIST["ticker"].tolist()
-    total        = len(tickers_all)
-    n_batches    = max(1, -(-total // BATCH_SIZE))
-    batch_idx    = ((week_number - 1) % n_batches) + 1
-    batch        = get_batch(WATCHLIST, week_number)
+    today       = datetime.date.today()
+    week_number = today.isocalendar()[1]
+    batch, batch_idx, n_batches = get_batch(WATCHLIST, week_number)
 
-    batch_info = (f"Σήμερα: {today}. Αυτή είναι η εβδομάδα {week_number}, "
+    batch_info = (f"Σήμερα: {today}. Εβδομάδα {week_number}, "
                   f"batch {batch_idx}/{n_batches} ({len(batch)} μετοχές): {', '.join(batch)}.")
 
     print(f"Starting screener — {batch_info}")
@@ -250,7 +318,7 @@ if __name__ == "__main__":
         print(f"Fetching {ticker}...")
         result = screen_ticker(ticker)
         results.append(result)
-        time.sleep(13)  # 25 calls/day = ~1 call/58s για ασφάλεια
+        time.sleep(13)
 
     valid = [r for r in results if r]
     if not valid:
@@ -263,10 +331,13 @@ if __name__ == "__main__":
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
-        cols    = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
-                   "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
-                   "roic","roic_vs_wacc","ev_ebitda"]
-        summary = claude_summary(shortlist[cols].to_json(orient="records"), batch_info)
+        cols = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
+                "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
+                "roic","roic_vs_wacc","ev_ebitda","pct_from_low",
+                "w52_flag","fragility"]
+        summary = claude_summary(
+            shortlist[cols].to_json(orient="records"), batch_info
+        )
 
     html = build_html(df, shortlist, summary)
     send_email(html, week_number, batch_idx, n_batches)
