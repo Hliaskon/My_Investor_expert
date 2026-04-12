@@ -3,3 +3,4 @@ pandas
 jinja2
 requests
 anthropic
+fredapi>=0.5.0
