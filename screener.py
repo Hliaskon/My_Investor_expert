@@ -27,6 +27,46 @@ SECTOR_RISK = {
     "Utilities":              {"macro": "low",    "sector": "low"},
 }
 
+# Fix #1 — DCF growth cap ανά sector
+# Αποτρέπει unrealistic g assumptions (π.χ. BIIB 19%)
+SECTOR_G_CAP = {
+    "Technology":             0.15,
+    "Communication Services": 0.10,
+    "Financials":             0.08,
+    "Healthcare":             0.12,
+    "Energy":                 0.07,
+    "Consumer Cyclical":      0.10,
+    "Consumer Defensive":     0.06,
+    "Industrials":            0.08,
+    "Basic Materials":        0.07,
+    "Real Estate":            0.06,
+    "Utilities":              0.05,
+}
+
+# Fix #2 — Graham Formula exclusions
+# Σε αυτούς τους κλάδους η Graham Formula παράγει artifacts
+GRAHAM_EXCLUDED_SECTORS = {
+    "Financials",        # Διαφορετική κεφαλαιακή δομή — P/B είναι ο σωστός δείκτης
+    "Consumer Cyclical", # Cyclical earnings → formula εκτινάσσεται
+    "Energy",            # Commodity-driven earnings, όχι stable growth
+    "Real Estate",       # Asset-based αποτίμηση, όχι earnings-based
+}
+
+# Fix #3 — Sector base risk για καλύτερη διαφοροποίηση
+SECTOR_BASE_RISK = {
+    "Technology":             1,
+    "Communication Services": 0,
+    "Financials":             2,   # macro + leverage sensitive
+    "Healthcare":             0,   # defensive
+    "Energy":                 2,   # commodity + geopolitical
+    "Consumer Cyclical":      2,   # airlines, auto = υψηλός κίνδυνος
+    "Consumer Defensive":     0,
+    "Industrials":            1,
+    "Basic Materials":        2,
+    "Real Estate":            1,
+    "Utilities":              0,
+}
+
 def alpha_get(function, symbol, extra={}):
     url    = "https://www.alphavantage.co/query"
     params = {"function": function, "symbol": symbol, "apikey": ALPHA_KEY, **extra}
@@ -57,29 +97,41 @@ def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5):
     total   += terminal / (1 + wacc_rate)**years
     return round(total, 2)
 
-def graham_value(eps, g_pct, bond_yield=4.4):
+def graham_value(eps, g_pct, sector, bond_yield=4.4):
+    if sector in GRAHAM_EXCLUDED_SECTORS:
+        return None  # N/A — formula δεν εφαρμόζεται σε αυτόν τον κλάδο
     if not eps or eps <= 0:
         return None
     return round(eps * (8.5 + 2 * g_pct) * (4.4 / bond_yield), 2)
 
 def risk_score(pe, pb, beta, de, sector):
     sr = SECTOR_RISK.get(sector, {"macro": "medium", "sector": "medium"})
+
+    # Valuation risk
     if pe and pe < 12 and pb and pb < 1.2:
         val_risk = "low"
     elif pe and pe > 30:
         val_risk = "high"
     else:
         val_risk = "medium"
-    if (de and de > 3) or (beta and beta > 1.5):
+
+    # Business risk — Fix #3: ενισχυμένα thresholds
+    if (de and de > 2) or (beta and beta > 1.5):
         biz_risk = "high"
+    elif (de and de > 1) or (beta and beta > 1.2):
+        biz_risk = "medium"
     elif de and de < 0.5 and beta and beta < 0.8:
         biz_risk = "low"
     else:
         biz_risk = "medium"
-    levels  = {"low": 0, "medium": 1, "high": 2}
-    avg     = (levels[val_risk] + levels[biz_risk] +
-               levels[sr["macro"]] + levels[sr["sector"]]) / 4
-    overall = "low" if avg < 0.75 else ("high" if avg > 1.5 else "medium")
+
+    levels   = {"low": 0, "medium": 1, "high": 2}
+    # Fix #3: προσθέτουμε sector base risk ως 5η διάσταση
+    base     = SECTOR_BASE_RISK.get(sector, 1)
+    avg      = (levels[val_risk] + levels[biz_risk] +
+                levels[sr["macro"]] + levels[sr["sector"]] + base) / 5
+    overall  = "low" if avg < 0.6 else ("high" if avg > 1.2 else "medium")
+
     return {
         "business":  biz_risk,
         "valuation": val_risk,
@@ -165,9 +217,11 @@ def screen_ticker(ticker):
             raise ValueError("No price available")
 
         w      = wacc(beta)
-        g_base = max(0.02, min(abs(g_est), 0.25))
+        # Fix #1: g cap ανά sector — αποτρέπει BIIB-style 19% g assumptions
+        sector_cap = SECTOR_G_CAP.get(sector, 0.12)
+        g_base = max(0.02, min(abs(g_est), sector_cap))
         g_bear = max(0.01, g_base - 0.06)
-        g_bull = min(0.35, g_base + 0.08)
+        g_bull = min(0.25, g_base + 0.08)
 
         # Fat tail bear case (Taleb): extra -3% growth, +2% WACC
         g_bear_fat = max(0.005, g_bear - 0.03)
@@ -176,7 +230,8 @@ def screen_ticker(ticker):
         dcf_base     = dcf_value(fcf_ps, g_base, w)
         dcf_bear     = dcf_value(fcf_ps, g_bear_fat, w + 0.02)  # fat tail
         dcf_bull     = dcf_value(fcf_ps, g_bull, w - 0.010)
-        gv           = graham_value(eps, g_base * 100)
+        # Fix #2: sector-aware Graham Formula
+        gv           = graham_value(eps, g_base * 100, sector)
 
         # ROIC proxy (ROA × leverage)
         roa  = safe_float(ov.get("ReturnOnAssetsTTM")) or None
@@ -219,6 +274,7 @@ def screen_ticker(ticker):
             "roe":             round(roe * 100, 1)  if roe   else None,
             "div_yield":       round(div * 100, 2),
             "g_base_pct":      round(g_base * 100, 1),
+            "g_cap_pct":       round(sector_cap * 100, 1),  # Fix #1: εμφανίζεται στο email
             "graham_value":    gv,
             "graham_mos":      mos(gv),
             "dcf_bear":        dcf_bear,
