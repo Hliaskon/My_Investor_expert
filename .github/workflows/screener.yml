@@ -24,4 +24,5 @@ jobs:
           EMAIL_RECEIVER:    ${{ secrets.EMAIL_RECEIVER }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ALPHA_KEY:         ${{ secrets.ALPHA_KEY }}
+          FRED_API_KEY:      ${{ secrets.FRED_API_KEY }}
         run: python screener.py
