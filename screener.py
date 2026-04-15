@@ -194,7 +194,9 @@ def screen_ticker(ticker):
         pe        = safe_float(ov.get("TrailingPE"))           or None
         pb        = safe_float(ov.get("PriceToBookRatio"))     or None
         eps       = safe_float(ov.get("EPS"))                  or None
-        beta      = safe_float(ov.get("Beta"), 1)              or 1.0
+        # Fix A: Beta floor 0.3 — κανένα public company δεν έχει beta < 0.3
+        # CPB είχε beta 0.03 → WACC 4.3% → DCF +452% (data artifact)
+        beta      = max(0.3, safe_float(ov.get("Beta"), 1) or 1.0)
         de        = safe_float(ov.get("DebtToEquityRatio"))    or None
         roe       = safe_float(ov.get("ReturnOnEquityTTM"))    or None
         div       = safe_float(ov.get("DividendYield"))
@@ -315,7 +317,7 @@ def get_batch(df, week_number):
     print(f"Week {week_number} → Batch {batch_idx+1}/{n_batches}: {batch}")
     return batch, batch_idx + 1, n_batches
 
-def apply_filters(df):
+def apply_filters(df, favored_sectors=None):
     if df.empty or "pe" not in df.columns:
         print("No data to filter.")
         return pd.DataFrame()
@@ -323,7 +325,20 @@ def apply_filters(df):
     f = f[f["pe"].notna()           & (f["pe"] < 20)]
     f = f[f["pb"].notna()           & (f["pb"] < 2.5)]
     f = f[f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)]
-    return f.sort_values("dcf_base_mos", ascending=False)
+    if favored_sectors:
+        before = len(f)
+        f = f[f["sector"].isin(favored_sectors)]
+        removed = before - len(f)
+        if removed > 0:
+            print(f"Macro filter removed {removed} stocks outside favored sectors: {favored_sectors}")
+        else:
+            print(f"Macro filter: all shortlist stocks in favored sectors OK")
+    f = f.sort_values("dcf_base_mos", ascending=False)
+    if "roic_vs_wacc" in f.columns:
+        destroyers = f[f["roic_vs_wacc"] == "negative"]["ticker"].tolist()
+        if destroyers:
+            print(f"Warning ROIC < WACC (value destroyers): {destroyers}")
+    return f
 
 def claude_summary(stocks_json, batch_info):
     import anthropic
@@ -381,13 +396,12 @@ if __name__ == "__main__":
         print("No valid data. Exiting.")
         exit(0)
 
-    df        = pd.DataFrame(valid)
-    shortlist = apply_filters(df)
-    print(f"Shortlist: {len(shortlist)} stocks")
-
-    # Macro overlay — graceful fallback αν αποτύχει
+    df            = pd.DataFrame(valid)
+    favored_sectors = []
     macro_html    = ""
     alignment_map = {}
+
+    # Macro overlay — τρέχει ΠΡΙΝ το apply_filters για να έχουμε favored_sectors
     if os.environ.get("FRED_API_KEY"):
         try:
             from fredapi import Fred
@@ -405,15 +419,19 @@ if __name__ == "__main__":
             sector_pe   = calculate_sector_pe(df)
             sector_vals = evaluate_sector_valuation(sector_pe)
             macro_html  = render_macro_html(macro_in, regime, yield_sig, fear, sector_vals)
-            # Alignment για κάθε shortlisted stock
+            favored_sectors = regime.get("favored_sectors", [])
             for _, row in df.iterrows():
                 alignment_map[row["ticker"]] = check_stock_macro_alignment(row["sector"], regime)
-            print("Macro overlay: OK")
+            print(f"Macro overlay: OK — Regime: {regime['regime']} — Favored: {favored_sectors}")
         except Exception as e:
             print(f"[MACRO WARNING] {e} — continuing without macro")
             macro_html = "<p style='color:#888;font-size:12px;padding:10px'>⚠️ Macro data unavailable this week.</p>"
     else:
         print("FRED_API_KEY not set — skipping macro overlay")
+
+    # Fix B: Macro-aware filtering — πάει ΜΕΤΑ το macro για να έχει favored_sectors
+    shortlist = apply_filters(df, favored_sectors=favored_sectors)
+    print(f"Shortlist: {len(shortlist)} stocks")
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
