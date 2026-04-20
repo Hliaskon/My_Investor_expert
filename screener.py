@@ -325,19 +325,21 @@ def apply_filters(df, favored_sectors=None):
     f = f[f["pe"].notna()           & (f["pe"] < 20)]
     f = f[f["pb"].notna()           & (f["pb"] < 2.5)]
     f = f[f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)]
-    if favored_sectors:
-        before = len(f)
-        f = f[f["sector"].isin(favored_sectors)]
-        removed = before - len(f)
-        if removed > 0:
-            print(f"Macro filter removed {removed} stocks outside favored sectors: {favored_sectors}")
-        else:
-            print(f"Macro filter: all shortlist stocks in favored sectors OK")
+
     f = f.sort_values("dcf_base_mos", ascending=False)
+
+    # Macro: SOFT warning μόνο — δεν αποκλείει
+    if favored_sectors:
+        not_favored = f[~f["sector"].isin(favored_sectors)]["ticker"].tolist()
+        if not_favored:
+            print(f"Macro soft warning — not in favored sectors: {not_favored}")
+
+    # ROIC < WACC soft warning
     if "roic_vs_wacc" in f.columns:
         destroyers = f[f["roic_vs_wacc"] == "negative"]["ticker"].tolist()
         if destroyers:
-            print(f"Warning ROIC < WACC (value destroyers): {destroyers}")
+            print(f"Warning ROIC < WACC: {destroyers}")
+
     return f
 
 def claude_summary(stocks_json, batch_info):
