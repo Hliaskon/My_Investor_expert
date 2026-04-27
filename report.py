@@ -38,13 +38,26 @@ def fragility_badge(level):
     else:
         return '<span style="background:#fdecea;color:#c0392b;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">⚠ Fragile</span>'
 
-def roic_badge(roic, roic_vs_wacc, wacc_val):
-    if roic is None:
-        return "<span style='color:#aaa;font-size:10px'>N/A</span>"
-    if roic_vs_wacc == "positive":
-        return f'<span style="background:#e6f9ef;color:#1a7a4a;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">✓ {roic}% &gt; WACC {wacc_val}%</span>'
+def roe_quality_badge(roe_val, roe_quality):
+    """Επιλογή Α: ROE vs Buffett 15% threshold — 100% αξιόπιστο"""
+    if roe_val is None or roe_quality is None:
+        return "<span style=\'color:#aaa;font-size:10px\'>N/A</span>"
+    if roe_quality == "strong":
+        return f'<span style="background:#e6f9ef;color:#1a7a4a;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">✓ ROE {roe_val}% ≥ 15%</span>'
+    elif roe_quality == "moderate":
+        return f'<span style="background:#fff8e1;color:#8a6000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">~ ROE {roe_val}% (10-15%)</span>'
     else:
-        return f'<span style="background:#fdecea;color:#c0392b;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">✗ {roic}% &lt; WACC {wacc_val}%</span>'
+        return f'<span style="background:#fdecea;color:#c0392b;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">✗ ROE {roe_val}% &lt; 10%</span>'
+
+def roic_badge(roic, roic_vs_wacc, wacc_val):
+    """Επιλογή Γ: ROIC proxy (D/E adjusted ROE) — informational, not exact"""
+    if roic is None:
+        return "<span style=\'color:#aaa;font-size:10px\'>N/A</span>"
+    disclaimer = " (proxy)"
+    if roic_vs_wacc == "positive":
+        return f'<span style="background:#e6f9ef;color:#1a7a4a;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">~ {roic}%{disclaimer} &gt; WACC {wacc_val}%</span>'
+    else:
+        return f'<span style="background:#fff8e1;color:#8a6000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">~ {roic}%{disclaimer} &lt; WACC {wacc_val}%</span>'
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -193,9 +206,14 @@ TEMPLATE = """
     <!-- Επιπλέον δείκτες -->
     <div class="four-col">
       <div class="mini-card">
-        <div class="mini-label">ROIC vs WACC</div>
+        <div class="mini-label">ROE Quality <span style="font-size:9px;color:#3a5bd9">(Buffett)</span></div>
+        <div style="margin-top:4px">{{ roe_quality_badge(r.roe, r.roe_quality) }}</div>
+        <div class="mini-sub">Threshold: ≥ 15%</div>
+      </div>
+      <div class="mini-card" style="border:1px dashed #ddd">
+        <div class="mini-label">ROIC est. <span style="font-size:9px;color:#888">(proxy)</span></div>
         <div style="margin-top:4px">{{ roic_badge(r.roic, r.roic_vs_wacc, r.wacc) }}</div>
-        <div class="mini-sub">Δημιουργία αξίας</div>
+        <div class="mini-sub" style="color:#aaa;font-size:9px">D/E adjusted ROE — not exact</div>
       </div>
       <div class="mini-card">
         <div class="mini-label">EV/EBITDA</div>
@@ -318,10 +336,16 @@ TEMPLATE = """
     </tr>
 
     <tr class="guide-row">
-      <td class="guide-name">ROIC vs WACC</td>
-      <td><span class="guide-source">Warren Buffett<br>Bridgewater</span></td>
-      <td>Return on Invested Capital vs Weighted Average Cost of Capital. Αν ROIC &gt; WACC η εταιρεία δημιουργεί πραγματική αξία — κάθε € που επενδύει αποδίδει περισσότερο από ό,τι κοστίζει. Αν ROIC &lt; WACC η εταιρεία καταστρέφει αξία ακόμα κι αν δείχνει κέρδη.</td>
-      <td style="color:#1a7a4a">ROIC &gt; WACC = ✓<br>Το σημαντικότερο quality signal</td>
+      <td class="guide-name">ROE Quality<br><small>(Buffett)</small></td>
+      <td><span class="guide-source">Warren Buffett</span></td>
+      <td>Return on Equity — πόσο αποδοτικά χρησιμοποιεί η εταιρεία τα κεφάλαια των μετόχων. Ο Buffett απαιτεί ROE &gt; 15% για να θεωρήσει μια εταιρεία ποιοτική. Αξιόπιστο metric — λαμβάνεται απευθείας από Alpha Vantage. Αδυναμία: εταιρείες με υψηλό leverage εμφανίζουν τεχνητά υψηλό ROE.</td>
+      <td style="color:#1a7a4a">≥ 15% ισχυρό ✓<br>10-15% αποδεκτό<br>&lt; 10% ανησυχητικό</td>
+    </tr>
+    <tr class="guide-row">
+      <td class="guide-name">ROIC est.<br><small>(proxy)</small></td>
+      <td><span class="guide-source">Graham +<br>Buffett</span></td>
+      <td>Εκτιμώμενο Return on Invested Capital = ROE × (1 / (1 + D/E)). Αφαιρεί το leverage effect από το ROE για πιο ρεαλιστική εικόνα. <strong>Σημαντικό:</strong> αυτό είναι proxy, όχι ακριβής υπολογισμός NOPAT/InvestedCapital. Χρήσιμο για σύγκριση vs WACC αλλά με επιφύλαξη. Εταιρείες με υγιές υψηλό χρέος (consumer staples) υποεκτιμώνται.</td>
+      <td>Proxy &gt; WACC = πιθανή αξία<br><span style="color:#888;font-size:10px">Χρήση ως ένδειξη μόνο</span></td>
     </tr>
 
     <tr class="guide-row">
@@ -396,6 +420,7 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None, 
     env.globals["w52_badge"]       = w52_badge
     env.globals["fragility_badge"] = fragility_badge
     env.globals["roic_badge"]      = roic_badge
+    env.globals["roe_quality_badge"] = roe_quality_badge
     t = env.from_string(TEMPLATE)
     return t.render(
         date          = datetime.date.today().isoformat(),
