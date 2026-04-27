@@ -235,12 +235,35 @@ def screen_ticker(ticker):
         # Fix #2: sector-aware Graham Formula
         gv           = graham_value(eps, g_base * 100, sector)
 
-        # ROIC proxy (ROA × leverage)
-        roa  = safe_float(ov.get("ReturnOnAssetsTTM")) or None
-        roic = round(roa * 100, 1) if roa else None
+        # --- Quality Metrics (Επιλογή Α + Γ) ---
+        # Α: ROE vs 15% Buffett threshold (αξιόπιστο από Alpha Vantage)
+        roe_quality = None
+        if roe is not None:
+            roe_pct = round(roe * 100, 1)
+            if roe_pct >= 15:
+                roe_quality = "strong"    # > 15% — Buffett minimum
+            elif roe_pct >= 10:
+                roe_quality = "moderate"  # 10-15% — αποδεκτό
+            else:
+                roe_quality = "weak"      # < 10% — ανησυχητικό
+
+        # Γ: ROIC proxy = ROE × (1 / (1 + D/E)) — D/E adjusted
+        # Αφαιρεί το leverage effect από το ROE
+        # Disclaimer: proxy, not exact NOPAT/InvestedCapital
+        roic_proxy = None
         roic_vs_wacc = None
-        if roic is not None:
-            roic_vs_wacc = "positive" if roic > w * 100 else "negative"
+        if roe is not None:
+            roe_pct = round(roe * 100, 1)
+            if de and de > 0:
+                roic_proxy = round(roe_pct * (1 / (1 + de)), 1)
+            else:
+                roic_proxy = roe_pct  # no debt → ROIC ≈ ROE
+            # Σύγκριση με WACC — informational μόνο, όχι filter
+            wacc_pct = round(w * 100, 1)
+            if roic_proxy > wacc_pct:
+                roic_vs_wacc = "positive"
+            else:
+                roic_vs_wacc = "negative"
 
         # 52-week proximity (behavioral)
         pct_from_low, w52_flag = calc_52w_proximity(price, low52, high52)
@@ -294,8 +317,9 @@ def screen_ticker(ticker):
             "sparkline":       [],
             "risk":            risk_score(pe, pb, beta, de, sector),
             "ev_ebitda":       round(ev_ebitda, 1) if ev_ebitda else None,
-            "roic":            roic,
+            "roic":            roic_proxy,       # D/E adjusted proxy
             "roic_vs_wacc":    roic_vs_wacc,
+            "roe_quality":     roe_quality,      # Buffett ROE signal
             "fcf_yield":       None,
             "rd_pct":          None,
             "rd_flag":         None,
@@ -325,21 +349,19 @@ def apply_filters(df, favored_sectors=None):
     f = f[f["pe"].notna()           & (f["pe"] < 20)]
     f = f[f["pb"].notna()           & (f["pb"] < 2.5)]
     f = f[f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)]
-
-    f = f.sort_values("dcf_base_mos", ascending=False)
-
-    # Macro: SOFT warning μόνο — δεν αποκλείει
     if favored_sectors:
-        not_favored = f[~f["sector"].isin(favored_sectors)]["ticker"].tolist()
-        if not_favored:
-            print(f"Macro soft warning — not in favored sectors: {not_favored}")
-
-    # ROIC < WACC soft warning
+        before = len(f)
+        f = f[f["sector"].isin(favored_sectors)]
+        removed = before - len(f)
+        if removed > 0:
+            print(f"Macro filter removed {removed} stocks outside favored sectors: {favored_sectors}")
+        else:
+            print(f"Macro filter: all shortlist stocks in favored sectors OK")
+    f = f.sort_values("dcf_base_mos", ascending=False)
     if "roic_vs_wacc" in f.columns:
         destroyers = f[f["roic_vs_wacc"] == "negative"]["ticker"].tolist()
         if destroyers:
-            print(f"Warning ROIC < WACC: {destroyers}")
-
+            print(f"Warning ROIC < WACC (value destroyers): {destroyers}")
     return f
 
 def claude_summary(stocks_json, batch_info):
