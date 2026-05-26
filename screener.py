@@ -74,7 +74,7 @@ GRAHAM_EXCLUDED_SECTORS = {
 SECTOR_BASE_RISK = {
     "Technology":             1,
     "Communication Services": 0,
-    "Financials":             2,
+    "Financials":             1,
     "Healthcare":             0,
     "Energy":                 2,
     "Consumer Cyclical":      2,
@@ -219,6 +219,12 @@ def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
             price = ma50
         if not price:
             raise ValueError("No price available")
+
+        # Μετά τον υπολογισμό price:
+        if price and ma50 and abs(price - ma50) / ma50 > 0.5:
+            # Τιμή απέχει >50% από 50DMA — πιθανό data artifact
+            print(f"[WARNING] {ticker}: price={price} vs 50DMA={ma50} — using 50DMA")
+            price = ma50
 
         w          = wacc(beta)
         sector_cap = SECTOR_G_CAP.get(sector, 0.12)
