@@ -11,7 +11,30 @@ ALPHA_KEY  = os.environ.get("ALPHA_KEY", "")
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
-BATCH_SIZE      = 24
+BATCH_SIZE      = 40   # ↑ από 24 — καλύπτει μεγαλύτερο universe
+
+# ─────────────────────────────────────────────────────────────────────
+# FIX A: Alpha Vantage sector name normalization
+# AV επιστρέφει "Financial Services", "Health Care" κλπ.
+# Τα δικά μας ονόματα: "Financials", "Healthcare" κλπ.
+# Fallback μόνο — primary source είναι πάντα το watchlist.csv
+# ─────────────────────────────────────────────────────────────────────
+SECTOR_AV_MAP = {
+    "Financial Services":     "Financials",
+    "Finance":                "Financials",
+    "FINANCE":                "Financials",
+    "Health Care":            "Healthcare",
+    "HEALTH CARE":            "Healthcare",
+    "Consumer Discretionary": "Consumer Cyclical",
+    "Consumer Staples":       "Consumer Defensive",
+    "Information Technology": "Technology",
+    "INFORMATION TECHNOLOGY": "Technology",
+    "Materials":              "Basic Materials",
+    "MATERIALS":              "Basic Materials",
+}
+
+def normalize_sector(av_sector: str) -> str:
+    return SECTOR_AV_MAP.get(av_sector, av_sector)
 
 SECTOR_RISK = {
     "Technology":             {"macro": "low",    "sector": "medium"},
@@ -27,8 +50,6 @@ SECTOR_RISK = {
     "Utilities":              {"macro": "low",    "sector": "low"},
 }
 
-# Fix #1 — DCF growth cap ανά sector
-# Αποτρέπει unrealistic g assumptions (π.χ. BIIB 19%)
 SECTOR_G_CAP = {
     "Technology":             0.15,
     "Communication Services": 0.10,
@@ -43,29 +64,27 @@ SECTOR_G_CAP = {
     "Utilities":              0.05,
 }
 
-# Fix #2 — Graham Formula exclusions
-# Σε αυτούς τους κλάδους η Graham Formula παράγει artifacts
 GRAHAM_EXCLUDED_SECTORS = {
-    "Financials",        # Διαφορετική κεφαλαιακή δομή — P/B είναι ο σωστός δείκτης
-    "Consumer Cyclical", # Cyclical earnings → formula εκτινάσσεται
-    "Energy",            # Commodity-driven earnings, όχι stable growth
-    "Real Estate",       # Asset-based αποτίμηση, όχι earnings-based
+    "Financials",
+    "Consumer Cyclical",
+    "Energy",
+    "Real Estate",
 }
 
-# Fix #3 — Sector base risk για καλύτερη διαφοροποίηση
 SECTOR_BASE_RISK = {
     "Technology":             1,
     "Communication Services": 0,
-    "Financials":             2,   # macro + leverage sensitive
-    "Healthcare":             0,   # defensive
-    "Energy":                 2,   # commodity + geopolitical
-    "Consumer Cyclical":      2,   # airlines, auto = υψηλός κίνδυνος
+    "Financials":             2,
+    "Healthcare":             0,
+    "Energy":                 2,
+    "Consumer Cyclical":      2,
     "Consumer Defensive":     0,
     "Industrials":            1,
     "Basic Materials":        2,
     "Real Estate":            1,
     "Utilities":              0,
 }
+
 
 def alpha_get(function, symbol, extra={}):
     url    = "https://www.alphavantage.co/query"
@@ -99,23 +118,19 @@ def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5):
 
 def graham_value(eps, g_pct, sector, bond_yield=4.4):
     if sector in GRAHAM_EXCLUDED_SECTORS:
-        return None  # N/A — formula δεν εφαρμόζεται σε αυτόν τον κλάδο
+        return None
     if not eps or eps <= 0:
         return None
     return round(eps * (8.5 + 2 * g_pct) * (4.4 / bond_yield), 2)
 
 def risk_score(pe, pb, beta, de, sector):
     sr = SECTOR_RISK.get(sector, {"macro": "medium", "sector": "medium"})
-
-    # Valuation risk
     if pe and pe < 12 and pb and pb < 1.2:
         val_risk = "low"
     elif pe and pe > 30:
         val_risk = "high"
     else:
         val_risk = "medium"
-
-    # Business risk — Fix #3: ενισχυμένα thresholds
     if (de and de > 2) or (beta and beta > 1.5):
         biz_risk = "high"
     elif (de and de > 1) or (beta and beta > 1.2):
@@ -124,68 +139,50 @@ def risk_score(pe, pb, beta, de, sector):
         biz_risk = "low"
     else:
         biz_risk = "medium"
-
-    levels   = {"low": 0, "medium": 1, "high": 2}
-    # Fix #3: προσθέτουμε sector base risk ως 5η διάσταση
-    base     = SECTOR_BASE_RISK.get(sector, 1)
-    avg      = (levels[val_risk] + levels[biz_risk] +
-                levels[sr["macro"]] + levels[sr["sector"]] + base) / 5
-    overall  = "low" if avg < 0.6 else ("high" if avg > 1.2 else "medium")
-
-    return {
-        "business":  biz_risk,
-        "valuation": val_risk,
-        "macro":     sr["macro"],
-        "sector":    sr["sector"],
-        "overall":   overall,
-    }
+    levels  = {"low": 0, "medium": 1, "high": 2}
+    base    = SECTOR_BASE_RISK.get(sector, 1)
+    avg     = (levels[val_risk] + levels[biz_risk] +
+               levels[sr["macro"]] + levels[sr["sector"]] + base) / 5
+    overall = "low" if avg < 0.6 else ("high" if avg > 1.2 else "medium")
+    return {"business": biz_risk, "valuation": val_risk,
+            "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
 
 def calc_52w_proximity(price, low52, high52):
-    """
-    Πόσο % πάνω από το 52-week low είναι η τρέχουσα τιμή.
-    <15% = behavioral buying zone (αγορά υπεραντέδρασε)
-    15-30% = neutral
-    >30% = απομακρύνθηκε από low
-    """
     try:
         low  = safe_float(low52)
         high = safe_float(high52)
         if low <= 0 or price <= 0:
             return None, None
-        pct_from_low  = round((price - low) / low * 100, 1)
-        pct_from_high = round((high - price) / high * 100, 1)
-        if pct_from_low < 15:
-            flag = "near_low"      # Strong behavioral signal
-        elif pct_from_low < 30:
-            flag = "neutral"
-        else:
-            flag = "away_from_low"
+        pct_from_low = round((price - low) / low * 100, 1)
+        if pct_from_low < 15:   flag = "near_low"
+        elif pct_from_low < 30: flag = "neutral"
+        else:                   flag = "away_from_low"
         return pct_from_low, flag
     except:
         return None, None
 
 def calc_fragility(de, current_ratio, beta):
-    """
-    Taleb-inspired fragility score.
-    Fragile = υψηλό χρέος + χαμηλή ρευστότητα + υψηλή μεταβλητότητα.
-    """
     score = 0
-    if de and de > 2:
-        score += 2
-    elif de and de > 1:
-        score += 1
-    if beta and beta > 1.3:
-        score += 2
-    elif beta and beta > 1.0:
-        score += 1
-    if score <= 1:
-        return "antifragile"
-    elif score <= 3:
-        return "neutral"
-    else:
-        return "fragile"
+    if de and de > 2:        score += 2
+    elif de and de > 1:      score += 1
+    if beta and beta > 1.3:  score += 2
+    elif beta and beta > 1.0: score += 1
+    if score <= 1:   return "antifragile"
+    elif score <= 3: return "neutral"
+    else:            return "fragile"
 
-def screen_ticker(ticker):
+
+def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
+    """
+    Full Tier-1 analysis for one ticker.
+
+    watchlist_sector: sector from watchlist.csv (authoritative).
+    If None, falls back to Alpha Vantage sector name (normalized via SECTOR_AV_MAP).
+
+    FIX A: Alpha Vantage returns "Financial Services" for banks, "Health Care"
+    for healthcare stocks — not matching our internal "Financials"/"Healthcare".
+    This caused all financial/healthcare stocks to fail the sector filter silently.
+    """
     try:
         ov = alpha_get("OVERVIEW", ticker)
         if not ov or not ov.get("Symbol"):
@@ -194,22 +191,27 @@ def screen_ticker(ticker):
         pe        = safe_float(ov.get("TrailingPE"))           or None
         pb        = safe_float(ov.get("PriceToBookRatio"))     or None
         eps       = safe_float(ov.get("EPS"))                  or None
-        # Fix A: Beta floor 0.3 — κανένα public company δεν έχει beta < 0.3
-        # CPB είχε beta 0.03 → WACC 4.3% → DCF +452% (data artifact)
         beta      = max(0.3, safe_float(ov.get("Beta"), 1) or 1.0)
         de        = safe_float(ov.get("DebtToEquityRatio"))    or None
         roe       = safe_float(ov.get("ReturnOnEquityTTM"))    or None
         div       = safe_float(ov.get("DividendYield"))
-        sector    = ov.get("Sector", "Unknown")
         target    = safe_float(ov.get("AnalystTargetPrice"))   or None
         high52    = ov.get("52WeekHigh")
         low52     = ov.get("52WeekLow")
         g_est     = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
         ev_ebitda = safe_float(ov.get("EVToEBITDA"))           or None
         ma50      = safe_float(ov.get("50DayMovingAverage"))
-        shares    = safe_float(ov.get("SharesOutstanding"))
 
-        # Price: EPS × PE fallback → 50DMA
+        # ── FIX A: sector source priority ────────────────────────────
+        # 1st: watchlist.csv sector (already normalized, always correct)
+        # 2nd: Alpha Vantage sector → normalize via SECTOR_AV_MAP
+        # 3rd: "Unknown" fallback
+        av_sector = ov.get("Sector", "Unknown")
+        sector    = watchlist_sector if watchlist_sector else normalize_sector(av_sector)
+        if not watchlist_sector and av_sector != sector:
+            print(f"  [sector] {ticker}: AV='{av_sector}' → normalized='{sector}'")
+        # ─────────────────────────────────────────────────────────────
+
         price = None
         if eps and pe:
             price = round(abs(eps) * abs(pe), 2)
@@ -218,151 +220,160 @@ def screen_ticker(ticker):
         if not price:
             raise ValueError("No price available")
 
-        w      = wacc(beta)
-        # Fix #1: g cap ανά sector — αποτρέπει BIIB-style 19% g assumptions
+        w          = wacc(beta)
         sector_cap = SECTOR_G_CAP.get(sector, 0.12)
-        g_base = max(0.02, min(abs(g_est), sector_cap))
-        g_bear = max(0.01, g_base - 0.06)
-        g_bull = min(0.25, g_base + 0.08)
+        g_base     = max(0.02, min(abs(g_est), sector_cap))
+        g_bear_fat = max(0.005, max(0.01, g_base - 0.06) - 0.03)
+        g_bull     = min(0.25, g_base + 0.08)
 
-        # Fat tail bear case (Taleb): extra -3% growth, +2% WACC
-        g_bear_fat = max(0.005, g_bear - 0.03)
+        fcf_ps   = eps * 0.7 if eps else None
+        dcf_base = dcf_value(fcf_ps, g_base, w)
+        dcf_bear = dcf_value(fcf_ps, g_bear_fat, w + 0.02)
+        dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
+        gv       = graham_value(eps, g_base * 100, sector)
 
-        fcf_ps       = eps * 0.7 if eps else None
-        dcf_base     = dcf_value(fcf_ps, g_base, w)
-        dcf_bear     = dcf_value(fcf_ps, g_bear_fat, w + 0.02)  # fat tail
-        dcf_bull     = dcf_value(fcf_ps, g_bull, w - 0.010)
-        # Fix #2: sector-aware Graham Formula
-        gv           = graham_value(eps, g_base * 100, sector)
-
-        # --- Quality Metrics (Επιλογή Α + Γ) ---
-        # Α: ROE vs 15% Buffett threshold (αξιόπιστο από Alpha Vantage)
         roe_quality = None
         if roe is not None:
             roe_pct = round(roe * 100, 1)
-            if roe_pct >= 15:
-                roe_quality = "strong"    # > 15% — Buffett minimum
-            elif roe_pct >= 10:
-                roe_quality = "moderate"  # 10-15% — αποδεκτό
-            else:
-                roe_quality = "weak"      # < 10% — ανησυχητικό
+            roe_quality = "strong" if roe_pct >= 15 else ("moderate" if roe_pct >= 10 else "weak")
 
-        # Γ: ROIC proxy = ROE × (1 / (1 + D/E)) — D/E adjusted
-        # Αφαιρεί το leverage effect από το ROE
-        # Disclaimer: proxy, not exact NOPAT/InvestedCapital
-        roic_proxy = None
-        roic_vs_wacc = None
+        roic_proxy = roic_vs_wacc = None
         if roe is not None:
-            roe_pct = round(roe * 100, 1)
-            if de and de > 0:
-                roic_proxy = round(roe_pct * (1 / (1 + de)), 1)
-            else:
-                roic_proxy = roe_pct  # no debt → ROIC ≈ ROE
-            # Σύγκριση με WACC — informational μόνο, όχι filter
-            wacc_pct = round(w * 100, 1)
-            if roic_proxy > wacc_pct:
-                roic_vs_wacc = "positive"
-            else:
-                roic_vs_wacc = "negative"
+            roe_pct    = round(roe * 100, 1)
+            roic_proxy = round(roe_pct * (1 / (1 + de)), 1) if (de and de > 0) else roe_pct
+            roic_vs_wacc = "positive" if roic_proxy > round(w * 100, 1) else "negative"
 
-        # 52-week proximity (behavioral)
         pct_from_low, w52_flag = calc_52w_proximity(price, low52, high52)
-
-        # Fragility score (Taleb)
-        fragility = calc_fragility(de, None, beta)
-
-        # CAPE proxy: usar 10y avg EPS si disponible, sino trailing
-        # Alpha Vantage no da 10y EPS history en free tier
-        # Usamos trailing PE como proxy y lo marcamos
-        cape_proxy = pe  # proxy — no es CAPE real
+        fragility              = calc_fragility(de, None, beta)
 
         def mos(val):
             if val and price and price > 0:
                 return round((val - price) / price * 100, 1)
             return None
 
-        # Analyst upside
-        analyst_upside = None
-        if target and price:
-            analyst_upside = round((target - price) / price * 100, 1)
+        analyst_upside = round((target - price) / price * 100, 1) if (target and price) else None
 
         return {
-            "ticker":          ticker,
-            "sector":          sector,
-            "price":           price,
-            "pe":              round(pe, 1)         if pe    else None,
-            "pb":              round(pb, 2)         if pb    else None,
-            "eps":             eps,
-            "beta":            round(beta, 2),
-            "wacc":            round(w * 100, 1),
-            "de":              round(de, 1)         if de    else None,
-            "roe":             round(roe * 100, 1)  if roe   else None,
-            "div_yield":       round(div * 100, 2),
-            "g_base_pct":      round(g_base * 100, 1),
-            "g_cap_pct":       round(sector_cap * 100, 1),  # Fix #1: εμφανίζεται στο email
-            "graham_value":    gv,
-            "graham_mos":      mos(gv),
-            "dcf_bear":        dcf_bear,
-            "dcf_base":        dcf_base,
-            "dcf_bull":        dcf_bull,
-            "dcf_bear_mos":    mos(dcf_bear),
-            "dcf_base_mos":    mos(dcf_base),
-            "dcf_bull_mos":    mos(dcf_bull),
-            "high52":          high52,
-            "low52":           low52,
-            "pct_from_low":    pct_from_low,
-            "w52_flag":        w52_flag,
-            "analyst_target":  target,
-            "analyst_upside":  analyst_upside,
-            "sparkline":       [],
-            "risk":            risk_score(pe, pb, beta, de, sector),
-            "ev_ebitda":       round(ev_ebitda, 1) if ev_ebitda else None,
-            "roic":            roic_proxy,       # D/E adjusted proxy
-            "roic_vs_wacc":    roic_vs_wacc,
-            "roe_quality":     roe_quality,      # Buffett ROE signal
-            "fcf_yield":       None,
-            "rd_pct":          None,
-            "rd_flag":         None,
-            "fragility":       fragility,
-            "cape_proxy":      round(cape_proxy, 1) if cape_proxy else None,
+            "ticker":         ticker,
+            "sector":         sector,
+            "price":          price,
+            "pe":             round(pe, 1)         if pe    else None,
+            "pb":             round(pb, 2)         if pb    else None,
+            "eps":            eps,
+            "beta":           round(beta, 2),
+            "wacc":           round(w * 100, 1),
+            "de":             round(de, 1)         if de    else None,
+            "roe":            round(roe * 100, 1)  if roe   else None,
+            "div_yield":      round(div * 100, 2),
+            "g_base_pct":     round(g_base * 100, 1),
+            "g_cap_pct":      round(sector_cap * 100, 1),
+            "graham_value":   gv,
+            "graham_mos":     mos(gv),
+            "dcf_bear":       dcf_bear,
+            "dcf_base":       dcf_base,
+            "dcf_bull":       dcf_bull,
+            "dcf_bear_mos":   mos(dcf_bear),
+            "dcf_base_mos":   mos(dcf_base),
+            "dcf_bull_mos":   mos(dcf_bull),
+            "high52":         high52,
+            "low52":          low52,
+            "pct_from_low":   pct_from_low,
+            "w52_flag":       w52_flag,
+            "analyst_target": target,
+            "analyst_upside": analyst_upside,
+            "sparkline":      [],
+            "risk":           risk_score(pe, pb, beta, de, sector),
+            "ev_ebitda":      round(ev_ebitda, 1) if ev_ebitda else None,
+            "roic":           roic_proxy,
+            "roic_vs_wacc":   roic_vs_wacc,
+            "roe_quality":    roe_quality,
+            "fcf_yield":      None,
+            "rd_pct":         None,
+            "rd_flag":        None,
+            "fragility":      fragility,
+            "cape_proxy":     round(pe, 1) if pe else None,
+            "macro_favored":  False,   # overwritten by apply_filters()
         }
 
     except Exception as e:
         print(f"Error {ticker}: {e}")
         return None
 
-def get_batch(df, week_number):
-    tickers   = df["ticker"].tolist()
-    total     = len(tickers)
+
+def get_batch(df: pd.DataFrame, week_number: int):
+    """
+    Returns current batch as DataFrame slice — preserves all columns
+    including 'sector' for passing to screen_ticker().
+    """
+    total     = len(df)
     n_batches = max(1, -(-total // BATCH_SIZE))
     batch_idx = (week_number - 1) % n_batches
     start     = batch_idx * BATCH_SIZE
-    batch     = tickers[start:start + BATCH_SIZE]
-    print(f"Week {week_number} → Batch {batch_idx+1}/{n_batches}: {batch}")
-    return batch, batch_idx + 1, n_batches
+    batch_df  = df.iloc[start : start + BATCH_SIZE].copy()
+    print(f"Week {week_number} → Batch {batch_idx+1}/{n_batches} "
+          f"({len(batch_df)} stocks): {batch_df['ticker'].tolist()}")
+    return batch_df, batch_idx + 1, n_batches
 
-def apply_filters(df, favored_sectors=None):
+
+def apply_filters(df: pd.DataFrame, favored_sectors=None) -> pd.DataFrame:
+    """
+    Value investing filters with per-filter diagnostics.
+
+    FIX B: Macro sector filter → SOFT alignment scoring (was hard exclusion).
+
+    Previous: f = f[f["sector"].isin(favored_sectors)]
+    → CI Healthcare +169% DCF, PFE +54%, WFC Financials +31% all blocked silently.
+
+    New: stocks in favored sectors sorted first, all qualifying stocks visible.
+    Macro alignment remains informational via alignment_map in the email.
+    """
     if df.empty or "pe" not in df.columns:
-        print("No data to filter.")
+        print("[FILTER] No data.")
         return pd.DataFrame()
-    f = df.copy()
-    f = f[f["pe"].notna()           & (f["pe"] < 20)]
-    f = f[f["pb"].notna()           & (f["pb"] < 2.5)]
-    f = f[f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)]
-    if favored_sectors:
-        before = len(f)
-        f = f[f["sector"].isin(favored_sectors)]
-        removed = before - len(f)
-        if removed > 0:
-            print(f"Macro filter removed {removed} stocks outside favored sectors: {favored_sectors}")
-        else:
-            print(f"Macro filter: all shortlist stocks in favored sectors OK")
-    f = f.sort_values("dcf_base_mos", ascending=False)
+
+    f  = df.copy()
+    n0 = len(f)
+
+    # ── P/E < 20 ──────────────────────────────────────────────────────
+    mask = f["pe"].notna() & (f["pe"] < 20)
+    excl = f[~mask]["ticker"].tolist()
+    f    = f[mask]
+    print(f"[FILTER] P/E < 20:      {len(f):>3}/{n0} pass | excl {len(excl)}: {excl}")
+
+    # ── P/B < 2.5 ─────────────────────────────────────────────────────
+    n1   = len(f)
+    mask = f["pb"].notna() & (f["pb"] < 2.5)
+    excl = f[~mask]["ticker"].tolist()
+    f    = f[mask]
+    print(f"[FILTER] P/B < 2.5:     {len(f):>3}/{n1} pass | excl {len(excl)}: {excl}")
+
+    # ── DCF Base MoS > 15% ────────────────────────────────────────────
+    n2   = len(f)
+    mask = f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)
+    excl = f[~mask]["ticker"].tolist()
+    f    = f[mask]
+    print(f"[FILTER] DCF MoS >15%:  {len(f):>3}/{n2} pass | excl {len(excl)}: {excl}")
+
+    # ── Macro: SOFT sort (NOT exclusion) ──────────────────────────────
+    if favored_sectors and len(f) > 0:
+        f["macro_favored"] = f["sector"].isin(favored_sectors)
+        n_fav = int(f["macro_favored"].sum())
+        print(f"[FILTER] Macro align:   {n_fav}/{len(f)} in favored sectors "
+              f"— sorted first, others NOT excluded")
+        f = f.sort_values(["macro_favored", "dcf_base_mos"], ascending=[False, False])
+    else:
+        f["macro_favored"] = False
+        f = f.sort_values("dcf_base_mos", ascending=False)
+
+    # ── ROIC warning (informational) ──────────────────────────────────
     if "roic_vs_wacc" in f.columns:
         destroyers = f[f["roic_vs_wacc"] == "negative"]["ticker"].tolist()
         if destroyers:
-            print(f"Warning ROIC < WACC (value destroyers): {destroyers}")
+            print(f"[WARNING] ROIC < WACC: {destroyers}")
+
+    print(f"[FILTER] ── Shortlist: {len(f)} stocks ──")
     return f
+
 
 def claude_summary(stocks_json, batch_info):
     import anthropic
@@ -381,6 +392,7 @@ def claude_summary(stocks_json, batch_info):
     )
     return msg.content[0].text
 
+
 def send_email(html_body, week_number, batch_idx, n_batches):
     sender   = os.environ["EMAIL_SENDER"]
     password = os.environ["EMAIL_PASSWORD"]
@@ -395,24 +407,29 @@ def send_email(html_body, week_number, batch_idx, n_batches):
         s.sendmail(sender, receiver, msg.as_string())
     print("Email sent!")
 
+
 if __name__ == "__main__":
     today       = datetime.date.today()
     week_number = today.isocalendar()[1]
-    batch, batch_idx, n_batches = get_batch(WATCHLIST, week_number)
+
+    # FIX A: get_batch returns DataFrame (preserves sector column)
+    batch_df, batch_idx, n_batches = get_batch(WATCHLIST, week_number)
 
     batch_info = (f"Σήμερα: {today}. Εβδομάδα {week_number}, "
-                  f"batch {batch_idx}/{n_batches} ({len(batch)} μετοχές): {', '.join(batch)}.")
-
+                  f"batch {batch_idx}/{n_batches} ({len(batch_df)} μετοχές): "
+                  f"{', '.join(batch_df['ticker'].tolist())}.")
     print(f"Starting screener — {batch_info}")
 
     results = []
-    for ticker in batch:
+    for _, row in batch_df.iterrows():
+        ticker = str(row["ticker"])
         if "." in ticker:
             print(f"Skipping {ticker}")
             continue
-        print(f"Fetching {ticker}...")
-        result = screen_ticker(ticker)
-        results.append(result)
+        # FIX A: pass watchlist sector — authoritative, no AV mismatch
+        ws = str(row["sector"]) if "sector" in row.index and pd.notna(row["sector"]) else None
+        print(f"Fetching {ticker} (sector: {ws})...")
+        results.append(screen_ticker(ticker, watchlist_sector=ws))
         time.sleep(13)
 
     valid = [r for r in results if r]
@@ -420,12 +437,11 @@ if __name__ == "__main__":
         print("No valid data. Exiting.")
         exit(0)
 
-    df            = pd.DataFrame(valid)
+    df              = pd.DataFrame(valid)
     favored_sectors = []
-    macro_html    = ""
-    alignment_map = {}
+    macro_html      = ""
+    alignment_map   = {}
 
-    # Macro overlay — τρέχει ΠΡΙΝ το apply_filters για να έχουμε favored_sectors
     if os.environ.get("FRED_API_KEY"):
         try:
             from fredapi import Fred
@@ -444,28 +460,25 @@ if __name__ == "__main__":
             sector_vals = evaluate_sector_valuation(sector_pe)
             macro_html  = render_macro_html(macro_in, regime, yield_sig, fear, sector_vals)
             favored_sectors = regime.get("favored_sectors", [])
-            for _, row in df.iterrows():
-                alignment_map[row["ticker"]] = check_stock_macro_alignment(row["sector"], regime)
-            print(f"Macro overlay: OK — Regime: {regime['regime']} — Favored: {favored_sectors}")
+            for _, r in df.iterrows():
+                alignment_map[r["ticker"]] = check_stock_macro_alignment(r["sector"], regime)
+            print(f"Macro: {regime['regime']} — favored: {favored_sectors}")
         except Exception as e:
             print(f"[MACRO WARNING] {e} — continuing without macro")
-            macro_html = "<p style='color:#888;font-size:12px;padding:10px'>⚠️ Macro data unavailable this week.</p>"
+            macro_html = "<p style='color:#888;font-size:12px;padding:10px'>⚠️ Macro data unavailable.</p>"
     else:
         print("FRED_API_KEY not set — skipping macro overlay")
 
-    # Fix B: Macro-aware filtering — πάει ΜΕΤΑ το macro για να έχει favored_sectors
+    # FIX B: soft sector filter
     shortlist = apply_filters(df, favored_sectors=favored_sectors)
-    print(f"Shortlist: {len(shortlist)} stocks")
 
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
-        cols = ["ticker","price","dcf_bear","dcf_base","dcf_bull",
-                "dcf_bear_mos","dcf_base_mos","dcf_bull_mos","risk",
-                "roic","roic_vs_wacc","ev_ebitda","pct_from_low",
-                "w52_flag","fragility"]
-        summary = claude_summary(
-            shortlist[cols].to_json(orient="records"), batch_info
-        )
+        cols = ["ticker", "price", "dcf_bear", "dcf_base", "dcf_bull",
+                "dcf_bear_mos", "dcf_base_mos", "dcf_bull_mos", "risk",
+                "roic", "roic_vs_wacc", "ev_ebitda", "pct_from_low",
+                "w52_flag", "fragility", "macro_favored"]
+        summary = claude_summary(shortlist[cols].to_json(orient="records"), batch_info)
 
     html = build_html(df, shortlist, summary, macro_html=macro_html,
                       alignment_map=alignment_map,
