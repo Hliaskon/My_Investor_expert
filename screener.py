@@ -4,14 +4,30 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from report import build_html
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST  = pd.read_csv(os.path.join(BASE_DIR, "watchlist.csv"))
-ALPHA_KEY  = os.environ.get("ALPHA_KEY", "")
+BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
+# FIX F: configurable filename — έτσι μπορείς να τρέξεις ξεχωριστά US
+# (watchlist.csv) και Ευρώπη (watchlist_europe.csv) χωρίς αλλαγή κώδικα,
+# π.χ. WATCHLIST_FILE=watchlist_europe.csv python screener.py
+WATCHLIST_FILE = os.environ.get("WATCHLIST_FILE", "watchlist.csv")
+WATCHLIST      = pd.read_csv(os.path.join(BASE_DIR, WATCHLIST_FILE))
+ALPHA_KEY      = os.environ.get("ALPHA_KEY", "")
 
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
-BATCH_SIZE      = 40   # ↑ από 24 — καλύπτει μεγαλύτερο universe
+# FIX C: batch size configurable via env var — Alpha Vantage FREE tier is
+# 25 calls/day, 5/min. 40 tickers/week ξεπερνά το free tier αν δεν έχεις
+# premium key. Έλεγξε το tier σου στο alphavantage.co/premium/ και βάλε
+# AV_BATCH_SIZE στα GitHub Secrets αν χρειάζεται μικρότερο batch.
+BATCH_SIZE      = int(os.environ.get("AV_BATCH_SIZE", "40"))
+
+# FIX D: sectors όπου το FCF proxy (EPS × 0.7) δεν είναι αξιόπιστο για DCF.
+# Τράπεζες/ασφαλιστικές δεν έχουν "free cash flow" με την κλασική έννοια —
+# το EPS×0.7 proxy δίνει τυχαία/παραπλανητικά νούμερα. Το Graham value ήδη
+# τα εξαιρούσε (GRAHAM_EXCLUDED_SECTORS) — τώρα εξαιρείται και το DCF.
+# Εναλλακτικό σήμα γι' αυτά τα sectors: sector-relative P/E/P/B
+# (βλ. macro_regime.calculate_sector_pe / evaluate_sector_valuation).
+DCF_UNRELIABLE_SECTORS = {"Financials"}
 
 # ─────────────────────────────────────────────────────────────────────
 # FIX A: Alpha Vantage sector name normalization
@@ -86,15 +102,60 @@ SECTOR_BASE_RISK = {
 }
 
 
-def alpha_get(function, symbol, extra={}):
+def alpha_get(function, symbol, extra={}, retries=2):
+    """
+    FIX C: retry με backoff όταν χτυπάμε rate limit (AV επιστρέφει "Note"
+    ή "Information" αντί για data όταν έχεις εξαντλήσει το quota).
+    Πριν έσκαγε αμέσως· τώρα περιμένει και ξαναδοκιμάζει πριν τα παρατήσει.
+    """
     url    = "https://www.alphavantage.co/query"
     params = {"function": function, "symbol": symbol, "apikey": ALPHA_KEY, **extra}
-    r      = requests.get(url, params=params, timeout=15)
-    r.raise_for_status()
-    data = r.json()
-    if "Error Message" in data or "Note" in data:
-        raise ValueError(data.get("Error Message") or data.get("Note"))
-    return data
+    for attempt in range(retries + 1):
+        r    = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if "Note" in data or "Information" in data:
+            msg = data.get("Note") or data.get("Information")
+            if attempt < retries:
+                wait = 60 * (attempt + 1)
+                print(f"[RATE LIMIT] {symbol}: {msg[:120]} — περιμένω {wait}s "
+                      f"(προσπάθεια {attempt+1}/{retries})")
+                time.sleep(wait)
+                continue
+            raise ValueError(f"Rate limit εξαντλήθηκε: {msg}")
+        if "Error Message" in data:
+            raise ValueError(data["Error Message"])
+        return data
+    raise ValueError("alpha_get: εξαντλήθηκαν οι προσπάθειες")
+
+
+def get_price_yfinance(ticker: str):
+    """
+    FIX E (κρίσιμο): πραγματική τιμή αγοράς από yfinance αντί για
+    ανακατασκευή EPS × trailing PE από το AV OVERVIEW endpoint.
+
+    Πρόβλημα με την παλιά προσέγγιση: το OVERVIEW δίνει trailing EPS/PE
+    που μπορεί να υστερούν quarters· το γινόμενό τους ΔΕΝ είναι η
+    σημερινή τιμή της μετοχής, απλά τη "μαντεύει". Κάθε MoS υπολογισμός
+    (DCF, Graham) βασίζεται πάνω σε αυτή την τιμή — λάθος τιμή = λάθος
+    σήμα undervalued/overvalued σε όλο το pipeline.
+    """
+    try:
+        import yfinance as yf
+        t    = yf.Ticker(ticker)
+        info = getattr(t, "fast_info", None)
+        price = None
+        if info is not None:
+            price = info.get("last_price") or info.get("lastPrice")
+        if not price:
+            hist = t.history(period="5d")
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+        if price and price > 0:
+            return round(float(price), 2)
+    except Exception as e:
+        print(f"[PRICE] yfinance απέτυχε για {ticker}: {e}")
+    return None
 
 def safe_float(val, default=0):
     try:
@@ -123,7 +184,21 @@ def graham_value(eps, g_pct, sector, bond_yield=4.4):
         return None
     return round(eps * (8.5 + 2 * g_pct) * (4.4 / bond_yield), 2)
 
-def risk_score(pe, pb, beta, de, sector):
+# FIX F: αγορές όπου υπάρχει πρόσθετος κίνδυνος πέρα από τα κλασικά
+# fundamentals — δεν αποτυπώνεται στο risk_score() που ήταν καλιμπραρισμένο
+# μόνο για US equities. China ADRs: VIE-structure (ο κάτοχος δεν έχει
+# άμεση νομική κυριότητα στην underlying εταιρεία, μόνο contractual claim)
+# + HFCAA delisting risk (εξαρτάται από PCAOB audit access status).
+MARKET_REGULATORY_RISK = {
+    "China (US-ADR)": {
+        "flag": "⚠️ VIE structure + HFCAA delisting risk",
+        "detail": "ADR = contractual claim, όχι άμεση κυριότητα στην underlying εταιρεία. "
+                   "Verify τρέχον PCAOB/HFCAA status πριν τοποθέτηση.",
+    },
+}
+
+
+def risk_score(pe, pb, beta, de, sector, market="US"):
     sr = SECTOR_RISK.get(sector, {"macro": "medium", "sector": "medium"})
     if pe and pe < 12 and pb and pb < 1.2:
         val_risk = "low"
@@ -144,8 +219,12 @@ def risk_score(pe, pb, beta, de, sector):
     avg     = (levels[val_risk] + levels[biz_risk] +
                levels[sr["macro"]] + levels[sr["sector"]] + base) / 5
     overall = "low" if avg < 0.6 else ("high" if avg > 1.2 else "medium")
-    return {"business": biz_risk, "valuation": val_risk,
-            "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
+    result  = {"business": biz_risk, "valuation": val_risk,
+               "macro": sr["macro"], "sector": sr["sector"], "overall": overall}
+    if market in MARKET_REGULATORY_RISK:
+        result["regulatory"] = MARKET_REGULATORY_RISK[market]
+        result["overall"]    = "high"  # regulatory tail-risk επικαλύπτει το βασικό scoring
+    return result
 
 def calc_52w_proximity(price, low52, high52):
     try:
@@ -172,7 +251,7 @@ def calc_fragility(de, current_ratio, beta):
     else:            return "fragile"
 
 
-def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
+def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: str = "US") -> dict | None:
     """
     Full Tier-1 analysis for one ticker.
 
@@ -212,9 +291,13 @@ def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
             print(f"  [sector] {ticker}: AV='{av_sector}' → normalized='{sector}'")
         # ─────────────────────────────────────────────────────────────
 
-        price = None
-        if eps and pe:
+        # FIX E: πραγματική τιμή από yfinance πρώτα· AV EPS×PE reconstruction
+        # μόνο ως έσχατο fallback, με ρητή προειδοποίηση ότι είναι λιγότερο αξιόπιστη.
+        price = get_price_yfinance(ticker)
+        if not price and eps and pe:
             price = round(abs(eps) * abs(pe), 2)
+            print(f"[PRICE WARNING] {ticker}: yfinance μη διαθέσιμο — "
+                  f"fallback σε EPS×PE reconstruction (λιγότερο αξιόπιστο)")
         if not price and ma50 > 0:
             price = ma50
         if not price:
@@ -232,10 +315,16 @@ def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
         g_bear_fat = max(0.005, max(0.01, g_base - 0.06) - 0.03)
         g_bull     = min(0.25, g_base + 0.08)
 
-        fcf_ps   = eps * 0.7 if eps else None
-        dcf_base = dcf_value(fcf_ps, g_base, w)
-        dcf_bear = dcf_value(fcf_ps, g_bear_fat, w + 0.02)
-        dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
+        fcf_ps = eps * 0.7 if eps else None
+
+        # FIX D: DCF εξαιρείται για sectors όπου το FCF proxy δεν βγάζει νόημα
+        # (τράπεζες/ασφαλιστικές — βλ. σχόλιο στο DCF_UNRELIABLE_SECTORS).
+        if sector in DCF_UNRELIABLE_SECTORS:
+            dcf_base = dcf_bear = dcf_bull = None
+        else:
+            dcf_base = dcf_value(fcf_ps, g_base, w)
+            dcf_bear = dcf_value(fcf_ps, g_bear_fat, w + 0.02)
+            dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
         gv       = graham_value(eps, g_base * 100, sector)
 
         roe_quality = None
@@ -288,7 +377,7 @@ def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
             "analyst_target": target,
             "analyst_upside": analyst_upside,
             "sparkline":      [],
-            "risk":           risk_score(pe, pb, beta, de, sector),
+            "risk":           risk_score(pe, pb, beta, de, sector, market=watchlist_market),
             "ev_ebitda":      round(ev_ebitda, 1) if ev_ebitda else None,
             "roic":           roic_proxy,
             "roic_vs_wacc":   roic_vs_wacc,
@@ -299,6 +388,7 @@ def screen_ticker(ticker: str, watchlist_sector: str = None) -> dict | None:
             "fragility":      fragility,
             "cape_proxy":     round(pe, 1) if pe else None,
             "macro_favored":  False,   # overwritten by apply_filters()
+            "market":         watchlist_market,
         }
 
     except Exception as e:
@@ -354,11 +444,20 @@ def apply_filters(df: pd.DataFrame, favored_sectors=None) -> pd.DataFrame:
     print(f"[FILTER] P/B < 2.5:     {len(f):>3}/{n1} pass | excl {len(excl)}: {excl}")
 
     # ── DCF Base MoS > 15% ────────────────────────────────────────────
-    n2   = len(f)
-    mask = f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)
-    excl = f[~mask]["ticker"].tolist()
-    f    = f[mask]
-    print(f"[FILTER] DCF MoS >15%:  {len(f):>3}/{n2} pass | excl {len(excl)}: {excl}")
+    # FIX D: sectors στο DCF_UNRELIABLE_SECTORS δεν έχουν dcf_base_mos
+    # (None by design — βλ. screen_ticker). Αν εφαρμόσουμε το ίδιο φίλτρο
+    # θα αποκλειστούν αυτόματα ΟΛΕΣ οι τράπεζες/ασφαλιστικές. Γι' αυτές
+    # περνάνε στο shortlist χωρίς DCF κριτήριο· η αποτίμησή τους κρίνεται
+    # από sector-relative P/E (macro overlay) — ήδη φαίνεται στο email.
+    n2       = len(f)
+    exempt   = f["sector"].isin(DCF_UNRELIABLE_SECTORS)
+    dcf_mask = f["dcf_base_mos"].notna() & (f["dcf_base_mos"] > 15)
+    mask     = dcf_mask | exempt
+    excl     = f[~mask]["ticker"].tolist()
+    n_exempt = int(exempt.sum())
+    f        = f[mask]
+    print(f"[FILTER] DCF MoS >15%:  {len(f):>3}/{n2} pass | excl {len(excl)} "
+          f"| {n_exempt} exempt (DCF-unreliable sector, π.χ. Financials): {excl}")
 
     # ── Macro: SOFT sort (NOT exclusion) ──────────────────────────────
     if favored_sectors and len(f) > 0:
@@ -426,16 +525,25 @@ if __name__ == "__main__":
                   f"{', '.join(batch_df['ticker'].tolist())}.")
     print(f"Starting screener — {batch_info}")
 
+    # FIX F: το παλιό φίλτρο "if '.' in ticker: skip" έμπλοκε ΚΑΘΕ ticker με
+    # τελεία — σωστό για ξεχασμένα US class-share tickers (π.χ. BF.B) αλλά
+    # θα έμπλοκε ΚΑΙ κάθε ευρωπαϊκό ticker (SAP.DE, ULVR.L, MC.PA). Τώρα
+    # επιτρέπονται ρητά τα γνωστά exchange suffixes· ό,τι άλλο έχει τελεία
+    # συνεχίζει να παραλείπεται όπως πριν.
+    INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW")
+
     results = []
     for _, row in batch_df.iterrows():
         ticker = str(row["ticker"])
-        if "." in ticker:
-            print(f"Skipping {ticker}")
+        if "." in ticker and not ticker.endswith(INTL_SUFFIXES):
+            print(f"Skipping {ticker} (μη αναγνωρισμένο format)")
             continue
         # FIX A: pass watchlist sector — authoritative, no AV mismatch
         ws = str(row["sector"]) if "sector" in row.index and pd.notna(row["sector"]) else None
-        print(f"Fetching {ticker} (sector: {ws})...")
-        results.append(screen_ticker(ticker, watchlist_sector=ws))
+        # FIX F: market column προαιρετική — backward compatible με παλιό watchlist.csv
+        wm = str(row["market"]) if "market" in row.index and pd.notna(row["market"]) else "US"
+        print(f"Fetching {ticker} (sector: {ws}, market: {wm})...")
+        results.append(screen_ticker(ticker, watchlist_sector=ws, watchlist_market=wm))
         time.sleep(13)
 
     valid = [r for r in results if r]
