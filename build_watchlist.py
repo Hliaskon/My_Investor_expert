@@ -1,13 +1,25 @@
 """
 build_watchlist.py — Dynamic Watchlist Generator
-Χρήση: python build_watchlist.py [--output watchlist.csv] [--dry-run]
+Χρήση:
+  python build_watchlist.py --market sp500   [--output watchlist.csv] [--dry-run]
+  python build_watchlist.py --market europe  [--output watchlist_europe.csv] [--dry-run]
+  python build_watchlist.py --market all     [--output watchlist_all.csv]   [--dry-run]
 
-Fetches S&P 500 from Wikipedia + NASDAQ 100 additions,
-applies Tier-0 pre-filter via yfinance,
-saves value-eligible stocks to watchlist.csv.
+Fetches S&P 500 / DAX / FTSE 100 / EURO STOXX 50 από Wikipedia,
+εφαρμόζει Tier-0 pre-filter via yfinance,
+αποθηκεύει value-eligible stocks σε CSV.
 
 Tier-0 criteria (broad — excludes obvious non-value):
   PE < 40, PB < 6, EPS > 0, MarketCap > $1B
+
+ΣΗΜΑΝΤΙΚΟ πριν τρέξεις --market europe σε παραγωγή:
+  Το screener.py χρησιμοποιεί Alpha Vantage OVERVIEW για fundamentals
+  (P/E, EPS, Beta, D/E). Η κάλυψη του AV για μη-US tickers (.DE, .L, .PA)
+  ΔΕΝ είναι επιβεβαιωμένη — δεν έχω δικτυακή πρόσβαση στο AV API για να
+  το ελέγξω εγώ. ΤΡΕΞΕ ΠΡΩΤΑ validate_international_coverage.py σε ~10
+  tickers πριν κάνεις commit ολόκληρη τη λίστα. Αν το AV OVERVIEW δεν
+  καλύπτει ένα ticker, ο screener απλά θα το αγνοήσει σιωπηλά
+  (except στο screen_ticker) — καλύτερα να το ξέρεις πριν, όχι μετά.
 
 Τρέχει εκτός GitHub Actions — locally, on-demand.
 """
@@ -43,6 +55,124 @@ def fetch_sp500() -> pd.DataFrame:
     df.columns = ["ticker", "name", "gics_sector"]
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
     print(f"  {len(df)} tickers")
+    return df
+
+
+def _find_col(table, keywords):
+    """Εντοπίζει στήλη ανάμεσα στα columns ενός Wikipedia table με βάση keywords.
+    Άμυνα ενάντια σε αλλαγές στη δομή του πίνακα (δεν κάνω hardcode ονόματα)."""
+    for c in table.columns:
+        cl = str(c).lower()
+        if any(kw in cl for kw in keywords):
+            return c
+    return None
+
+
+def fetch_dax(suffix: str = ".DE") -> pd.DataFrame:
+    """DAX 40 (Γερμανία, Xetra). Wikipedia: 'DAX' page."""
+    print("Fetching DAX (Γερμανία) από Wikipedia...")
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/DAX")
+        for t in tables:
+            tick_col = _find_col(t, ["ticker", "symbol"])
+            name_col = _find_col(t, ["company", "name"])
+            sect_col = _find_col(t, ["sector", "industry", "prime standard"])
+            if tick_col and name_col:
+                df = t[[tick_col, name_col] + ([sect_col] if sect_col else [])].copy()
+                df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
+                if "gics_sector" not in df.columns:
+                    df["gics_sector"] = "Unknown"
+                df["ticker"] = df["ticker"].astype(str).str.strip() + suffix
+                df["market"] = "Germany"
+                print(f"  {len(df)} tickers")
+                return df[["ticker", "name", "gics_sector", "market"]]
+    except Exception as e:
+        print(f"  [WARNING] DAX fetch απέτυχε: {e}")
+    return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
+
+
+def fetch_ftse100(suffix: str = ".L") -> pd.DataFrame:
+    """FTSE 100 (Αγγλία, LSE). Wikipedia: 'FTSE 100 Index' page."""
+    print("Fetching FTSE 100 (Αγγλία) από Wikipedia...")
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/FTSE_100_Index")
+        for t in tables:
+            tick_col = _find_col(t, ["ticker", "epic", "symbol"])
+            name_col = _find_col(t, ["company"])
+            sect_col = _find_col(t, ["sector", "ftse industry"])
+            if tick_col and name_col:
+                df = t[[tick_col, name_col] + ([sect_col] if sect_col else [])].copy()
+                df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
+                if "gics_sector" not in df.columns:
+                    df["gics_sector"] = "Unknown"
+                df["ticker"] = df["ticker"].astype(str).str.strip() + suffix
+                df["market"] = "UK"
+                print(f"  {len(df)} tickers")
+                return df[["ticker", "name", "gics_sector", "market"]]
+    except Exception as e:
+        print(f"  [WARNING] FTSE 100 fetch απέτυχε: {e}")
+    return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
+
+
+def fetch_euro_stoxx50() -> pd.DataFrame:
+    """
+    EURO STOXX 50 — 50 μεγαλύτερες blue-chip εταιρείες της Ευρωζώνης
+    (Γαλλία, Γερμανία, Ολλανδία, Ιταλία, Ισπανία κλπ). Καλή προσέγγιση
+    για "ευρύτερη Ευρώπη" πέρα από DAX/FTSE — τα exchange suffixes
+    διαφέρουν ανά χώρα, οπότε εξάγονται από τη στήλη 'exchange' αν υπάρχει
+    στο Wikipedia table, αλλιώς μένουν χωρίς suffix (χρειάζεται manual fix).
+    """
+    print("Fetching EURO STOXX 50 (ευρύτερη Ευρώπη) από Wikipedia...")
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/EURO_STOXX_50")
+        for t in tables:
+            tick_col = _find_col(t, ["ticker", "symbol"])
+            name_col = _find_col(t, ["company", "name"])
+            sect_col = _find_col(t, ["sector", "industry", "icb"])
+            if tick_col and name_col:
+                df = t[[tick_col, name_col] + ([sect_col] if sect_col else [])].copy()
+                df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
+                if "gics_sector" not in df.columns:
+                    df["gics_sector"] = "Unknown"
+                df["ticker"] = df["ticker"].astype(str).str.strip()
+                df["market"] = "Eurozone"
+                print(f"  {len(df)} tickers — ΠΡΟΣΟΧΗ: exchange suffix (.PA/.AS/.MI/.MC/.DE) "
+                      f"ΔΕΝ έχει προστεθεί αυτόματα, verify manually πριν production.")
+                return df[["ticker", "name", "gics_sector", "market"]]
+    except Exception as e:
+        print(f"  [WARNING] EURO STOXX 50 fetch απέτυχε: {e}")
+    return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
+
+
+# Curated list — US-listed China ADRs. ΔΕΝ χρησιμοποιούμε HKEX (.HK) ή
+# A-shares tickers γιατί το Alpha Vantage OVERVIEW πιθανότατα δεν τα καλύπτει
+# (unverified — δες σχόλιο στην κορυφή του αρχείου). ADRs στο NYSE/NASDAQ
+# περνάνε από το ίδιο pipeline, ΑΛΛΑ έχουν πρόσθετο κίνδυνο που δεν
+# αποτυπώνεται στο risk_score() του screener.py:
+#   - VIE structure: ο κάτοχος ADR δεν έχει άμεση νομική κυριότητα στην
+#     underlying κινεζική εταιρεία, μόνο contractual claim.
+#   - HFCAA delisting risk: εξαρτάται από PCAOB audit access — status
+#     μπορεί να αλλάξει, verify πριν commit.
+CHINA_ADR_WATCHLIST = [
+    {"ticker": "BABA", "name": "Alibaba Group",       "gics_sector": "Consumer Cyclical"},
+    {"ticker": "PDD",  "name": "PDD Holdings",         "gics_sector": "Consumer Cyclical"},
+    {"ticker": "JD",   "name": "JD.com",               "gics_sector": "Consumer Cyclical"},
+    {"ticker": "BIDU", "name": "Baidu",                "gics_sector": "Communication Services"},
+    {"ticker": "NTES", "name": "NetEase",               "gics_sector": "Communication Services"},
+    {"ticker": "TCOM", "name": "Trip.com Group",        "gics_sector": "Consumer Cyclical"},
+    {"ticker": "YUMC", "name": "Yum China",             "gics_sector": "Consumer Cyclical"},
+    {"ticker": "NIO",  "name": "NIO Inc",               "gics_sector": "Consumer Cyclical"},
+    {"ticker": "LI",   "name": "Li Auto",               "gics_sector": "Consumer Cyclical"},
+    {"ticker": "ZTO",  "name": "ZTO Express",           "gics_sector": "Industrials"},
+]
+
+
+def fetch_china_adr() -> pd.DataFrame:
+    print("Φόρτωση curated λίστας US-listed China ADRs (όχι live-verified)...")
+    df = pd.DataFrame(CHINA_ADR_WATCHLIST)
+    df["market"] = "China (US-ADR)"
+    print(f"  {len(df)} tickers — verify listing status πριν production "
+          f"(delisting risk / HFCAA).")
     return df
 
 
@@ -124,21 +254,49 @@ def tier0_filter(universe: pd.DataFrame, dry_run: bool = False) -> pd.DataFrame:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output",     default="watchlist.csv")
+    parser.add_argument("--output",     default=None)
     parser.add_argument("--dry-run",    action="store_true",
-                        help="Skip yfinance — include all S&P 500 stocks")
+                        help="Skip yfinance Tier-0 filter — include ό,τι βρέθηκε")
     parser.add_argument("--sp500-only", action="store_true")
+    parser.add_argument("--market", choices=["sp500", "europe", "china_adr", "all"],
+                        default="sp500",
+                        help="sp500 (default, US) | europe (DAX+FTSE100+EuroStoxx50) | "
+                             "china_adr (US-listed China ADRs, curated) | all")
     args = parser.parse_args()
 
-    sp500    = fetch_sp500()
-    universe = sp500
-    if not args.sp500_only:
-        extras   = fetch_nasdaq100_extras(set(sp500["ticker"]))
-        universe = pd.concat([sp500, extras], ignore_index=True)
+    frames = []
+
+    if args.market in ("sp500", "all"):
+        sp500 = fetch_sp500()
+        frames.append(sp500)
+        if not args.sp500_only:
+            frames.append(fetch_nasdaq100_extras(set(sp500["ticker"])))
+
+    if args.market in ("europe", "all"):
+        frames.append(fetch_dax())
+        frames.append(fetch_ftse100())
+        frames.append(fetch_euro_stoxx50())
+
+    if args.market in ("china_adr", "all"):
+        frames.append(fetch_china_adr())
+
+    frames   = [f for f in frames if not f.empty]
+    universe = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    if universe.empty:
+        print("Καμία εταιρεία δεν βρέθηκε — έλεγξε δικτυακή πρόσβαση/Wikipedia δομή.")
+        raise SystemExit(1)
+
+    default_output = {
+        "sp500": "watchlist.csv", "europe": "watchlist_europe.csv",
+        "china_adr": "watchlist_china_adr.csv", "all": "watchlist_all.csv",
+    }[args.market]
+    output = args.output or default_output
 
     result = tier0_filter(universe, dry_run=args.dry_run)
     if result.empty:
         print("No stocks passed Tier-0.")
     else:
-        result[["ticker", "name", "sector"]].to_csv(args.output, index=False)
-        print(f"\nSaved {len(result)} stocks → {args.output}")
+        cols = ["ticker", "name", "sector"] + (["market"] if "market" in result.columns else [])
+        result[cols].to_csv(output, index=False)
+        print(f"\nSaved {len(result)} stocks → {output}")
