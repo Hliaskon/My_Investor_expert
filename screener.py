@@ -371,8 +371,13 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
         # 2nd: Alpha Vantage sector → normalize via SECTOR_AV_MAP
         # 3rd: "Unknown" fallback
         av_sector = ov.get("Sector", "Unknown")
-        sector    = watchlist_sector if watchlist_sector else normalize_sector(av_sector)
-        if not watchlist_sector and av_sector != sector:
+        # FIX L: "Unknown" ήταν truthy string — ποτέ δεν έκανε fallback στο
+        # yfinance sector. Το watchlist_europe.csv (dry-run, χωρίς πλήρες
+        # GICS mapping) έχει 137/190 "Unknown" — χωρίς αυτό το fix θα έμεναν
+        # μόνιμα Unknown αντί να πάρουν το πραγματικό sector.
+        wl_sector_usable = watchlist_sector if watchlist_sector and watchlist_sector.lower() != "unknown" else None
+        sector    = wl_sector_usable if wl_sector_usable else normalize_sector(av_sector)
+        if not wl_sector_usable and av_sector != sector:
             print(f"  [sector] {ticker}: AV='{av_sector}' → normalized='{sector}'")
         # ─────────────────────────────────────────────────────────────
 
