@@ -2,6 +2,20 @@ from jinja2 import Environment
 import datetime
 import pandas as pd
 
+def tier_badge(tier, reason=None):
+    """FIX R: STRONG BUY/BUY/HOLD/AVOID badge — το πιο ορατό στοιχείο σε
+    κάθε γραμμή, με hover-style tooltip (title attr) που εξηγεί το γιατί."""
+    styles = {
+        "STRONG BUY": ("background:#1a7a4a;color:#fff", "🟢🟢 STRONG BUY"),
+        "BUY":        ("background:#e6f9ef;color:#1a7a4a", "🟢 BUY"),
+        "HOLD":       ("background:#fff8e1;color:#8a6000", "🟡 HOLD"),
+        "AVOID":      ("background:#fdecea;color:#c0392b", "🔴 AVOID"),
+    }
+    style, label = styles.get(tier, styles["HOLD"])
+    title = f' title="{reason}"' if reason else ""
+    return (f'<span{title} style="font-size:12px;font-weight:800;padding:4px 12px;'
+            f'border-radius:14px;{style}">{label}</span>')
+
 def risk_badge(level):
     colors = {
         "low":    ("background:#e6f9ef;color:#1a7a4a", "Χαμηλός"),
@@ -195,6 +209,7 @@ TEMPLATE = """
     <div class="srow-top">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="ticker-big">{{ r.ticker }}</span>
+        {{ tier_badge(r.tier, r.tier_reason) }}
         <span class="sector-tag">{{ r.sector }}</span>
         {{ risk_badge(r.risk.overall) }}
         {{ fragility_badge(r.fragility) }}
@@ -205,6 +220,12 @@ TEMPLATE = """
         {% endif %}
       </div>
       <div style="font-size:15px;font-weight:700">${{ r.price }}</div>
+    </div>
+
+    <div style="font-size:10px;color:#888;margin:-6px 0 10px 2px">
+      Confidence Score: <strong>{{ r.tier_score }}/90</strong> ·
+      Data completeness: <strong>{{ r.data_completeness }}%</strong> ·
+      {{ r.tier_reason }}
     </div>
 
     <!-- DCF + Risk -->
@@ -465,6 +486,7 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
         alignment_map = {}
     env = Environment()
     env.globals["risk_badge"]      = risk_badge
+    env.globals["tier_badge"]      = tier_badge
     env.globals["mos_badge"]       = mos_badge
     env.globals["w52_badge"]       = w52_badge
     env.globals["fragility_badge"] = fragility_badge
