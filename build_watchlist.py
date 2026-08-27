@@ -27,6 +27,23 @@ Tier-0 criteria (broad — excludes obvious non-value):
 import pandas as pd
 import time
 import argparse
+import io
+import urllib.request
+
+# FIX I: η Wikipedia μπλοκάρει (HTTP 403) requests χωρίς browser-like
+# User-Agent — και το pd.read_html(url) δεν στέλνει κανένα. Επηρέαζε
+# ΟΛΕΣ τις fetch_* συναρτήσεις παρακάτω, όχι μόνο Ασία. Fix: τραβάμε το
+# HTML εμείς με requests-like header, μετά το περνάμε στο pd.read_html.
+_WIKI_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; MyInvestorExpertBot/1.0; "
+                   "+https://github.com/Hliaskon/My_Investor_expert)"
+}
+
+
+def _read_html_wikipedia(url: str):
+    req  = urllib.request.Request(url, headers=_WIKI_HEADERS)
+    html = urllib.request.urlopen(req, timeout=20).read()
+    return pd.read_html(io.StringIO(html.decode("utf-8")))
 
 GICS_TO_SECTOR = {
     "Information Technology":  "Technology",
@@ -50,7 +67,7 @@ TIER0_MCAP_MIN = 1e9    # $1B+
 
 def fetch_sp500() -> pd.DataFrame:
     print("Fetching S&P 500 from Wikipedia...")
-    tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+    tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
     df     = tables[0][["Symbol", "Security", "GICS Sector"]].copy()
     df.columns = ["ticker", "name", "gics_sector"]
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
@@ -72,7 +89,7 @@ def fetch_dax(suffix: str = ".DE") -> pd.DataFrame:
     """DAX 40 (Γερμανία, Xetra). Wikipedia: 'DAX' page."""
     print("Fetching DAX (Γερμανία) από Wikipedia...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/DAX")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/DAX")
         for t in tables:
             tick_col = _find_col(t, ["ticker", "symbol"])
             name_col = _find_col(t, ["company", "name"])
@@ -95,7 +112,7 @@ def fetch_ftse100(suffix: str = ".L") -> pd.DataFrame:
     """FTSE 100 (Αγγλία, LSE). Wikipedia: 'FTSE 100 Index' page."""
     print("Fetching FTSE 100 (Αγγλία) από Wikipedia...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/FTSE_100_Index")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/FTSE_100_Index")
         for t in tables:
             tick_col = _find_col(t, ["ticker", "epic", "symbol"])
             name_col = _find_col(t, ["company"])
@@ -124,7 +141,7 @@ def fetch_euro_stoxx50() -> pd.DataFrame:
     """
     print("Fetching EURO STOXX 50 (ευρύτερη Ευρώπη) από Wikipedia...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/EURO_STOXX_50")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/EURO_STOXX_50")
         for t in tables:
             tick_col = _find_col(t, ["ticker", "symbol"])
             name_col = _find_col(t, ["company", "name"])
@@ -180,7 +197,7 @@ def fetch_nikkei225(suffix: str = ".T") -> pd.DataFrame:
     """Nikkei 225 (Ιαπωνία, Tokyo Stock Exchange). Wikipedia: 'Nikkei 225' page."""
     print("Fetching Nikkei 225 (Ιαπωνία) από Wikipedia...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Nikkei_225")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/Nikkei_225")
         for t in tables:
             tick_col = _find_col(t, ["code", "ticker", "symbol"])
             name_col = _find_col(t, ["company", "name"])
@@ -204,7 +221,7 @@ def fetch_hang_seng(suffix: str = ".HK") -> pd.DataFrame:
     """Hang Seng Index (Χονγκ Κονγκ, HKEX). Wikipedia: 'Hang Seng Index' page."""
     print("Fetching Hang Seng (Χονγκ Κονγκ) από Wikipedia...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Hang_Seng_Index")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/Hang_Seng_Index")
         for t in tables:
             tick_col = _find_col(t, ["ticker", "sehk", "stock code", "code"])
             name_col = _find_col(t, ["company", "name"])
@@ -228,7 +245,7 @@ def fetch_hang_seng(suffix: str = ".HK") -> pd.DataFrame:
 def fetch_nasdaq100_extras(sp500_set: set) -> pd.DataFrame:
     print("Fetching NASDAQ 100 additions...")
     try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+        tables = _read_html_wikipedia("https://en.wikipedia.org/wiki/Nasdaq-100")
         for t in tables:
             col = next((c for c in t.columns
                         if "ticker" in str(c).lower() or "symbol" in str(c).lower()), None)
