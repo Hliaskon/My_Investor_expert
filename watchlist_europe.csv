@@ -1,144 +1,144 @@
 ticker,name,sector
-ADS.DE.DE,Adidas,Unknown
-AIR.PA.DE,Airbus,Unknown
-ALV.DE.DE,Allianz,Unknown
-BAS.DE.DE,BASF,Unknown
-BAYN.DE.DE,Bayer,Unknown
-BEI.DE.DE,Beiersdorf,Unknown
-BMW.DE.DE,BMW,Unknown
-BNR.DE.DE,Brenntag,Unknown
-CBK.DE.DE,Commerzbank,Unknown
-CON.DE.DE,Continental,Unknown
-DTG.DE.DE,Daimler Truck,Unknown
-DBK.DE.DE,Deutsche Bank,Unknown
-DB1.DE.DE,Deutsche Börse,Unknown
-DHL.DE.DE,Deutsche Post,Unknown
-DTE.DE.DE,Deutsche Telekom,Unknown
+ADS.DE.DE,Adidas,Consumer Cyclical
+AIR.PA.DE,Airbus,Industrials
+ALV.DE.DE,Allianz,Financials
+BAS.DE.DE,BASF,Basic Materials
+BAYN.DE.DE,Bayer,Healthcare
+BEI.DE.DE,Beiersdorf,Consumer Defensive
+BMW.DE.DE,BMW,Consumer Cyclical
+BNR.DE.DE,Brenntag,Basic Materials
+CBK.DE.DE,Commerzbank,Financials
+CON.DE.DE,Continental,Consumer Cyclical
+DTG.DE.DE,Daimler Truck,Industrials
+DBK.DE.DE,Deutsche Bank,Financials
+DB1.DE.DE,Deutsche Börse,Financials
+DHL.DE.DE,Deutsche Post,Industrials
+DTE.DE.DE,Deutsche Telekom,Communication Services
 EOAN.DE.DE,E.ON,Utilities
-FRE.DE.DE,Fresenius,Unknown
-FME.DE.DE,Fresenius Medical Care,Unknown
-G1A.DE.DE,GEA Group,Unknown
-HNR1.DE.DE,Hannover Re,Unknown
-HEI.DE.DE,Heidelberg Materials,Unknown
-HEN3.DE.DE,Henkel,Unknown
-IFX.DE.DE,Infineon Technologies,Unknown
-MBG.DE.DE,Mercedes-Benz Group,Unknown
-MRK.DE.DE,Merck,Unknown
-MTX.DE.DE,MTU Aero Engines,Unknown
-MUV2.DE.DE,Munich Re,Unknown
-PAH3.DE.DE,Porsche SE,Unknown
-QIA.DE.DE,Qiagen,Unknown
-RHM.DE.DE,Rheinmetall,Unknown
+FRE.DE.DE,Fresenius,Healthcare
+FME.DE.DE,Fresenius Medical Care,Healthcare
+G1A.DE.DE,GEA Group,Industrials
+HNR1.DE.DE,Hannover Re,Financials
+HEI.DE.DE,Heidelberg Materials,Basic Materials
+HEN3.DE.DE,Henkel,Consumer Defensive
+IFX.DE.DE,Infineon Technologies,Technology
+MBG.DE.DE,Mercedes-Benz Group,Consumer Cyclical
+MRK.DE.DE,Merck,Healthcare
+MTX.DE.DE,MTU Aero Engines,Industrials
+MUV2.DE.DE,Munich Re,Financials
+PAH3.DE.DE,Porsche SE,Financials
+QIA.DE.DE,Qiagen,Healthcare
+RHM.DE.DE,Rheinmetall,Industrials
 RWE.DE.DE,RWE,Utilities
-SAP.DE.DE,SAP,Unknown
-G24.DE.DE,Scout24,Unknown
+SAP.DE.DE,SAP,Technology
+G24.DE.DE,Scout24,Communication Services
 SIE.DE.DE,Siemens,Industrials
-ENR.DE.DE,Siemens Energy,Unknown
-SHL.DE.DE,Siemens Healthineers,Unknown
-SY1.DE.DE,Symrise,Unknown
-VOW3.DE.DE,Volkswagen Group,Unknown
+ENR.DE.DE,Siemens Energy,Industrials
+SHL.DE.DE,Siemens Healthineers,Healthcare
+SY1.DE.DE,Symrise,Basic Materials
+VOW3.DE.DE,Volkswagen Group,Consumer Cyclical
 VNA.DE.DE,Vonovia,Real Estate
-ZAL.DE.DE,Zalando,Unknown
-III.L,3i,Unknown
-ABDN.L,Aberdeen Group,Unknown
-ADM.L,Admiral Group,Unknown
-AAF.L,Airtel Africa,Unknown
-ALW.L,Alliance Witan,Unknown
-AAL.L,Anglo American plc,Unknown
-ANTO.L,Antofagasta plc,Unknown
-ABF.L,Associated British Foods,Unknown
-AZN.L,AstraZeneca,Unknown
-AUTO.L,Autotrader Group,Unknown
-AV.L,Aviva,Unknown
-BAB.L,Babcock International,Unknown
-BA.L,BAE Systems,Unknown
-BARC.L,Barclays,Unknown
-BTRW.L,Barratt Redrow,Unknown
-BEZ.L,Beazley,Unknown
-BP.L,BP,Unknown
-BATS.L,British American Tobacco,Unknown
-BLND.L,British Land,Unknown
-BT.A.L,BT Group,Unknown
-BNZL.L,Bunzl,Unknown
-BRBY.L,Burberry Group,Unknown
-CNA.L,Centrica,Unknown
-CCEP.L,Coca-Cola Europacific Partners,Unknown
-CCH.L,Coca-Cola HBC,Unknown
-CPG.L,Compass Group,Unknown
-CCC.L,Computacenter,Unknown
-CTEC.L,Convatec,Unknown
-CRDA.L,Croda International,Unknown
-DCC.L,DCC Energy,Unknown
-DGE.L,Diageo,Unknown
-DPLM.L,Diploma,Unknown
-EDV.L,Endeavour Mining,Unknown
-ENT.L,Entain,Unknown
-EXPN.L,Experian,Unknown
-FCIT.L,F & C Investment Trust,Unknown
-FRES.L,Fresnillo plc,Unknown
-GAW.L,Games Workshop,Unknown
-GLEN.L,Glencore,Unknown
-GSK.L,GSK plc,Unknown
-HLN.L,Haleon,Unknown
-HLMA.L,Halma plc,Unknown
-HSX.L,Hiscox,Unknown
-HWDN.L,Howdens Joinery,Unknown
-HSBA.L,HSBC,Unknown
-ICG.L,ICG,Unknown
-IGG.L,IG Group,Unknown
-IHG.L,IHG Hotels & Resorts,Unknown
-IMI.L,IMI,Unknown
-IMB.L,Imperial Brands,Unknown
-INF.L,Informa,Unknown
-IAG.L,International Airlines Group,Unknown
-ITRK.L,Intertek,Unknown
-INVP.L,Investec,Unknown
-JD.L,JD Sports,Unknown
-BGEO.L,Lion Finance Group,Unknown
-KGF.L,Kingfisher plc,Unknown
-LAND.L,Land Securities,Unknown
-LGEN.L,Legal & General,Unknown
-LLOY.L,Lloyds Banking Group,Unknown
-LMP.L,LondonMetric Property,Unknown
-LSEG.L,London Stock Exchange Group,Unknown
-MNG.L,M&G,Unknown
-MKS.L,Marks & Spencer,Unknown
-MRO.L,Melrose Industries,Unknown
-MTLN.L,Metlen Energy & Metals,Unknown
-NG.L,National Grid plc,Unknown
-NWG.L,NatWest Group,Unknown
-NXT.L,Next plc,Unknown
-PSON.L,Pearson plc,Unknown
-PSH.L,Pershing Square Holdings,Unknown
-PSN.L,Persimmon,Unknown
-PCT.L,Polar Capital Technology Trust,Unknown
-PRU.L,Prudential plc,Unknown
-RKT.L,Reckitt,Unknown
-REL.L,RELX,Unknown
-RTO.L,Rentokil Initial,Unknown
-RIO.L,Rio Tinto,Unknown
-RR.L,Rolls-Royce Holdings,Unknown
-SGE.L,Sage Group,Unknown
-SBRY.L,Sainsbury's,Unknown
-SDR.L,Schroders,Unknown
-SMT.L,Scottish Mortgage Investment Trust,Unknown
-SGRO.L,Segro,Unknown
-SVT.L,Severn Trent,Unknown
-SHEL.L,Shell plc,Unknown
-SMIN.L,Smiths Group,Unknown
-SN.L,Smith & Nephew,Unknown
-SPX.L,Spirax Group,Unknown
-SSE.L,SSE plc,Unknown
-STAN.L,Standard Chartered,Unknown
-SDLF.L,Standard Life,Unknown
-STJ.L,St. James's Place,Unknown
-TSCO.L,Tesco,Unknown
-BBOX.L,Tritax Big Box REIT,Unknown
-ULVR.L,Unilever,Unknown
-UU.L,United Utilities,Unknown
-VOD.L,Vodafone Group,Unknown
-WEIR.L,Weir,Unknown
-WTB.L,Whitbread,Unknown
+ZAL.DE.DE,Zalando,Consumer Cyclical
+III.L,3i,Financials
+ABDN.L,Aberdeen Group,Financials
+ADM.L,Admiral Group,Financials
+AAF.L,Airtel Africa,Communication Services
+ALW.L,Alliance Witan,Financials
+AAL.L,Anglo American plc,Basic Materials
+ANTO.L,Antofagasta plc,Basic Materials
+ABF.L,Associated British Foods,Consumer Defensive
+AZN.L,AstraZeneca,Healthcare
+AUTO.L,Autotrader Group,Communication Services
+AV.L,Aviva,Financials
+BAB.L,Babcock International,Industrials
+BA.L,BAE Systems,Industrials
+BARC.L,Barclays,Financials
+BTRW.L,Barratt Redrow,Consumer Cyclical
+BEZ.L,Beazley,Financials
+BP.L,BP,Energy
+BATS.L,British American Tobacco,Consumer Defensive
+BLND.L,British Land,Real Estate
+BT.A.L,BT Group,Communication Services
+BNZL.L,Bunzl,Industrials
+BRBY.L,Burberry Group,Consumer Cyclical
+CNA.L,Centrica,Utilities
+CCEP.L,Coca-Cola Europacific Partners,Consumer Defensive
+CCH.L,Coca-Cola HBC,Consumer Defensive
+CPG.L,Compass Group,Consumer Cyclical
+CCC.L,Computacenter,Technology
+CTEC.L,Convatec,Healthcare
+CRDA.L,Croda International,Basic Materials
+DCC.L,DCC Energy,Industrials
+DGE.L,Diageo,Consumer Defensive
+DPLM.L,Diploma,Industrials
+EDV.L,Endeavour Mining,Basic Materials
+ENT.L,Entain,Consumer Cyclical
+EXPN.L,Experian,Industrials
+FCIT.L,F & C Investment Trust,Financials
+FRES.L,Fresnillo plc,Basic Materials
+GAW.L,Games Workshop,Consumer Cyclical
+GLEN.L,Glencore,Basic Materials
+GSK.L,GSK plc,Healthcare
+HLN.L,Haleon,Healthcare
+HLMA.L,Halma plc,Industrials
+HSX.L,Hiscox,Financials
+HWDN.L,Howdens Joinery,Industrials
+HSBA.L,HSBC,Financials
+ICG.L,ICG,Financials
+IGG.L,IG Group,Financials
+IHG.L,IHG Hotels & Resorts,Consumer Cyclical
+IMI.L,IMI,Industrials
+IMB.L,Imperial Brands,Consumer Defensive
+INF.L,Informa,Communication Services
+IAG.L,International Airlines Group,Industrials
+ITRK.L,Intertek,Industrials
+INVP.L,Investec,Financials
+JD.L,JD Sports,Consumer Cyclical
+BGEO.L,Lion Finance Group,Financials
+KGF.L,Kingfisher plc,Consumer Cyclical
+LAND.L,Land Securities,Real Estate
+LGEN.L,Legal & General,Financials
+LLOY.L,Lloyds Banking Group,Financials
+LMP.L,LondonMetric Property,Real Estate
+LSEG.L,London Stock Exchange Group,Financials
+MNG.L,M&G,Financials
+MKS.L,Marks & Spencer,Consumer Defensive
+MRO.L,Melrose Industries,Industrials
+MTLN.L,Metlen Energy & Metals,Industrials
+NG.L,National Grid plc,Utilities
+NWG.L,NatWest Group,Financials
+NXT.L,Next plc,Consumer Cyclical
+PSON.L,Pearson plc,Consumer Defensive
+PSH.L,Pershing Square Holdings,Financials
+PSN.L,Persimmon,Consumer Cyclical
+PCT.L,Polar Capital Technology Trust,Financials
+PRU.L,Prudential plc,Financials
+RKT.L,Reckitt,Consumer Defensive
+REL.L,RELX,Industrials
+RTO.L,Rentokil Initial,Industrials
+RIO.L,Rio Tinto,Basic Materials
+RR.L,Rolls-Royce Holdings,Industrials
+SGE.L,Sage Group,Technology
+SBRY.L,Sainsbury's,Consumer Defensive
+SDR.L,Schroders,Financials
+SMT.L,Scottish Mortgage Investment Trust,Financials
+SGRO.L,Segro,Real Estate
+SVT.L,Severn Trent,Utilities
+SHEL.L,Shell plc,Energy
+SMIN.L,Smiths Group,Industrials
+SN.L,Smith & Nephew,Healthcare
+SPX.L,Spirax Group,Industrials
+SSE.L,SSE plc,Utilities
+STAN.L,Standard Chartered,Financials
+SDLF.L,Standard Life,Financials
+STJ.L,St. James's Place,Financials
+TSCO.L,Tesco,Consumer Defensive
+BBOX.L,Tritax Big Box REIT,Real Estate
+ULVR.L,Unilever,Consumer Defensive
+UU.L,United Utilities,Utilities
+VOD.L,Vodafone Group,Communication Services
+WEIR.L,Weir,Industrials
+WTB.L,Whitbread,Consumer Cyclical
 ADS.DE,Adidas,Consumer Cyclical
 ADYEN.AS,Adyen,Financials
 AD.AS,Ahold Delhaize,Consumer Defensive
@@ -159,7 +159,7 @@ BN.PA,Danone,Consumer Defensive
 DBK.DE,Deutsche Bank,Financials
 DB1.DE,Deutsche Börse,Financials
 DHL.DE,Deutsche Post,Industrials
-DTE.DE,Deutsche Telekom,Unknown
+DTE.DE,Deutsche Telekom,Communication Services
 ENEL.MI,Enel,Utilities
 ENI.MI,Eni,Energy
 EL.PA,EssilorLuxottica,Healthcare
