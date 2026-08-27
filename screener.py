@@ -40,9 +40,11 @@ TERMINAL_GROWTH = 0.025
 # (π.χ. αν το yfinance αρχίσει να μπλοκάρει σε πολύ μεγάλα runs).
 SCREEN_ALL      = os.environ.get("SCREEN_ALL", "1") == "1"
 BATCH_SIZE      = int(os.environ.get("BATCH_SIZE", "10000"))
-# Delay μεταξύ tickers — προστασία από soft-blocking της Yahoo σε πολύ
-# γρήγορα διαδοχικά requests. Full universe (~950 tickers) × 0.6s ≈ 10 λεπτά.
-REQUEST_DELAY   = float(os.environ.get("REQUEST_DELAY", "0.6"))
+# Delay μεταξύ tickers. FIX K: 0.6s αποδείχτηκε πολύ επιθετικό — το
+# GitHub Actions IP είναι κοινόχρηστο και η Yahoo μπλόκαρε 85/85 requests
+# στο build_watchlist.py test. 1.5s default· full universe (~950 tickers)
+# ≈ 24 λεπτά, ακόμα άνετα μέσα στο 6ωρο όριο του GitHub Actions job.
+REQUEST_DELAY   = float(os.environ.get("REQUEST_DELAY", "1.5"))
 
 # FIX D: sectors όπου το FCF proxy (EPS × 0.7) δεν είναι αξιόπιστο για DCF.
 # Τράπεζες/ασφαλιστικές δεν έχουν "free cash flow" με την κλασική έννοια —
@@ -126,6 +128,32 @@ SECTOR_BASE_RISK = {
 }
 
 
+# FIX K: GitHub Actions runners έχουν ΚΟΙΝΟ IP pool ανάμεσα σε χιλιάδες
+# repos — η Yahoo το βλέπει σαν πολύ "καυτό" IP και μπλοκάρει (429) πιο
+# επιθετικά απ' ό,τι θα έκανε στο δικό σου IP. Retry με backoff βοηθάει
+# ΜΟΝΟ αν είναι per-minute rate-limit· αν είναι IP-level block (ΟΛΑ τα
+# tickers αποτυγχάνουν αμέσως), το backoff δεν αρκεί — θα το δεις σαν
+# [ABORT] μήνυμα στο log αν συμβεί.
+def _yfinance_info_with_retry(ticker: str, max_retries: int = 3, base_wait: int = 25):
+    import yfinance as yf
+    for attempt in range(max_retries + 1):
+        try:
+            info = yf.Ticker(ticker).info
+            if not info:
+                raise ValueError("empty info")
+            return info
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "Too Many Requests" in str(e) or \
+                            "Expecting value" in str(e)
+            if is_rate_limit and attempt < max_retries:
+                wait = base_wait * (attempt + 1)
+                print(f"  [RATE LIMIT] {ticker}: περιμένω {wait}s "
+                      f"(προσπάθεια {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            raise
+
+
 def get_fundamentals_yfinance(ticker: str) -> dict | None:
     """
     FIX G (η ουσιαστική αλλαγή): αντικαθιστά εντελώς το Alpha Vantage
@@ -147,8 +175,7 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
     η υπόλοιπη screen_ticker() να μη χρειάζεται αλλαγή.
     """
     try:
-        import yfinance as yf
-        info = yf.Ticker(ticker).info
+        info = _yfinance_info_with_retry(ticker)
         if not info or not (info.get("symbol") or info.get("longName")):
             return None
 
@@ -683,17 +710,29 @@ if __name__ == "__main__":
     INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW", ".T", ".HK")
 
     results = []
+    consecutive_failures = 0
     for _, row in batch_df.iterrows():
         ticker = str(row["ticker"])
         if "." in ticker and not ticker.endswith(INTL_SUFFIXES):
             print(f"Skipping {ticker} (μη αναγνωρισμένο format)")
             continue
+
+        # FIX K: αν αποτύχουν 15 στη σειρά, είναι πιθανό IP-level block από
+        # τη Yahoo (κοινό GitHub Actions IP pool), όχι μεμονωμένα προβλήματα.
+        # Σταματάμε αντί να σπαταλάμε ώρες σε retries που δεν θα πετύχουν.
+        if consecutive_failures >= 15:
+            print(f"\n[ABORT] {consecutive_failures} συνεχόμενες αποτυχίες — πιθανό IP block "
+                  f"από Yahoo. Σταματάω εδώ· ό,τι μαζεύτηκε μέχρι τώρα θα σταλεί κανονικά.")
+            break
+
         # FIX A: pass watchlist sector — authoritative, no AV mismatch
         ws = str(row["sector"]) if "sector" in row.index and pd.notna(row["sector"]) else None
         # FIX F: market column προαιρετική — backward compatible με παλιό watchlist.csv
         wm = str(row["market"]) if "market" in row.index and pd.notna(row["market"]) else "US"
         print(f"Fetching {ticker} (sector: {ws}, market: {wm})...")
-        results.append(screen_ticker(ticker, watchlist_sector=ws, watchlist_market=wm))
+        r = screen_ticker(ticker, watchlist_sector=ws, watchlist_market=wm)
+        results.append(r)
+        consecutive_failures = 0 if r else consecutive_failures + 1
         time.sleep(REQUEST_DELAY)
 
     valid = [r for r in results if r]
