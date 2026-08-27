@@ -1,5 +1,6 @@
 from jinja2 import Environment
 import datetime
+import pandas as pd
 
 def risk_badge(level):
     colors = {
@@ -438,6 +439,26 @@ TEMPLATE = """
 </html>
 """
 
+def _records_no_nan(df):
+    """
+    FIX O: pandas μετατρέπει None → NaN (float) σε numeric στήλες — και
+    δεν μπορεί να αποθηκεύσει None ξανά μέσα σε float64 column (γυρνάει
+    πάντα σε NaN, ακόμα κι αν κάνεις .where()). Λύση: καθαρισμός ΜΕΤΑ το
+    to_dict(), σε επίπεδο dict — εκεί το None επιμένει κανονικά.
+    Στο Jinja template, "{{ r.de or '—' }}" δεν πιάνει NaN (είναι truthy
+    στην Python!) — γι' αυτό έβγαινε κυριολεκτικά "nan" στο email αντί
+    για "—" (DCF για τράπεζες, D/E, EV/EBITDA όπου λείπει δεδομένο).
+    """
+    if df.empty:
+        return []
+    records = df.to_dict("records")
+    for rec in records:
+        for k, v in rec.items():
+            if isinstance(v, float) and pd.isna(v):
+                rec[k] = None
+    return records
+
+
 def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
                batch_idx=1, n_batches=5, performance_df=None):
     if alignment_map is None:
@@ -457,8 +478,8 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
         total         = len(df_all),
         batch_idx     = batch_idx,
         n_batches     = n_batches,
-        shortlist     = df_short.to_dict("records") if not df_short.empty else [],
-        all_stocks    = df_all.to_dict("records"),
+        shortlist     = _records_no_nan(df_short),
+        all_stocks    = _records_no_nan(df_all),
         summary       = summary,
         macro_html    = macro_html,
         alignment_map = alignment_map,
