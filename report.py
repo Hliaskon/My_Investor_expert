@@ -147,6 +147,33 @@ TEMPLATE = """
 {{ macro_html }}
 {% endif %}
 
+{% if performance %}
+<div class="card">
+  <div class="sec">📈 Performance Tracker — Παλιότερες Προτάσεις</div>
+  <table>
+    <tr>
+      <th>Ticker</th><th>Ημ/νία Πρότασης</th><th>Τιμή Τότε</th>
+      <th>Τιμή Τώρα</th><th>Απόδοση</th><th>Ημέρες</th>
+    </tr>
+    {% for p in performance %}
+    <tr>
+      <td class="green" style="font-weight:700">{{ p.ticker }}</td>
+      <td class="muted">{{ p.date_flagged }}</td>
+      <td>${{ p.price_at_flag }}</td>
+      <td>${{ p.price_now }}</td>
+      <td class="{{ 'green' if p.return_pct > 0 else 'red' }}" style="font-weight:700">
+        {{ '%+.1f'|format(p.return_pct) }}%
+      </td>
+      <td class="muted">{{ p.days_held }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div style="font-size:10px;color:#888;margin-top:10px">
+    Μετοχές που φλαγκαρίστηκαν πριν 21+ ημέρες — πραγματική απόδοση από την ημέρα πρότασης έως σήμερα.
+  </div>
+</div>
+{% endif %}
+
 {% if summary %}
 <div class="card">
   <div class="sec">Claude Summary</div>
@@ -411,7 +438,8 @@ TEMPLATE = """
 </html>
 """
 
-def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None, batch_idx=1, n_batches=5):
+def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
+               batch_idx=1, n_batches=5, performance_df=None):
     if alignment_map is None:
         alignment_map = {}
     env = Environment()
@@ -422,6 +450,8 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None, 
     env.globals["roic_badge"]      = roic_badge
     env.globals["roe_quality_badge"] = roe_quality_badge
     t = env.from_string(TEMPLATE)
+    performance = ([] if performance_df is None or performance_df.empty
+                    else performance_df.to_dict("records"))
     return t.render(
         date          = datetime.date.today().isoformat(),
         total         = len(df_all),
@@ -432,4 +462,5 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None, 
         summary       = summary,
         macro_html    = macro_html,
         alignment_map = alignment_map,
+        performance   = performance,
     )
