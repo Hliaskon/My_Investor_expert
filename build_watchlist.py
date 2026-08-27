@@ -103,6 +103,7 @@ def fetch_dax(suffix: str = ".DE") -> pd.DataFrame:
                 df["market"] = "Germany"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
+        print(f"  [WARNING] DAX: βρέθηκαν {len(tables)} πίνακες, κανένας δεν ταίριαξε.")
     except Exception as e:
         print(f"  [WARNING] DAX fetch απέτυχε: {e}")
     return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
@@ -126,6 +127,7 @@ def fetch_ftse100(suffix: str = ".L") -> pd.DataFrame:
                 df["market"] = "UK"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
+        print(f"  [WARNING] FTSE 100: βρέθηκαν {len(tables)} πίνακες, κανένας δεν ταίριαξε.")
     except Exception as e:
         print(f"  [WARNING] FTSE 100 fetch απέτυχε: {e}")
     return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
@@ -156,6 +158,7 @@ def fetch_euro_stoxx50() -> pd.DataFrame:
                 print(f"  {len(df)} tickers — ΠΡΟΣΟΧΗ: exchange suffix (.PA/.AS/.MI/.MC/.DE) "
                       f"ΔΕΝ έχει προστεθεί αυτόματα, verify manually πριν production.")
                 return df[["ticker", "name", "gics_sector", "market"]]
+        print(f"  [WARNING] EURO STOXX 50: βρέθηκαν {len(tables)} πίνακες, κανένας δεν ταίριαξε.")
     except Exception as e:
         print(f"  [WARNING] EURO STOXX 50 fetch απέτυχε: {e}")
     return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
@@ -212,6 +215,11 @@ def fetch_nikkei225(suffix: str = ".T") -> pd.DataFrame:
                 df["market"] = "Japan"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
+        # FIX J: αν φτάσαμε εδώ, ΚΑΝΕΝΑΣ πίνακας δεν ταίριαξε με τα
+        # heuristics — πριν επέστρεφε άδειο dataframe ΧΩΡΙΣ κανένα μήνυμα.
+        print(f"  [WARNING] Nikkei 225: βρέθηκαν {len(tables)} πίνακες στη σελίδα, "
+              f"αλλά κανένας δεν είχε αναγνωρίσιμες στήλες ticker/company — "
+              f"η δομή της Wikipedia page πιθανόν άλλαξε.")
     except Exception as e:
         print(f"  [WARNING] Nikkei 225 fetch απέτυχε: {e}")
     return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
@@ -237,6 +245,8 @@ def fetch_hang_seng(suffix: str = ".HK") -> pd.DataFrame:
                 df["market"] = "Hong Kong"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
+        print(f"  [WARNING] Hang Seng: βρέθηκαν {len(tables)} πίνακες στη σελίδα, "
+              f"αλλά κανένας δεν είχε αναγνωρίσιμες στήλες ticker/company.")
     except Exception as e:
         print(f"  [WARNING] Hang Seng fetch απέτυχε: {e}")
     return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
@@ -258,6 +268,32 @@ def fetch_nasdaq100_extras(sp500_set: set) -> pd.DataFrame:
     return pd.DataFrame(columns=["ticker", "name", "gics_sector"])
 
 
+# FIX K: GitHub Actions runners έχουν ΚΟΙΝΟ IP pool ανάμεσα σε χιλιάδες
+# repos — η Yahoo το βλέπει σαν πολύ πιο "καυτό" IP απ' ό,τι το δικό σου
+# και μπλοκάρει (429) πολύ πιο επιθετικά. Retry με exponential backoff
+# βοηθάει ΜΟΝΟ αν είναι per-minute rate-limit· αν είναι IP-level block
+# (πιθανό αν αποτύχουν ΟΛΑ τα tickers αμέσως, όπως έγινε), το backoff
+# δεν το λύνει πλήρως — χρειάζεται μεγαλύτερο περιθώριο.
+def _yfinance_info_with_retry(ticker: str, max_retries: int = 3, base_wait: int = 25):
+    for attempt in range(max_retries + 1):
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            if not info:
+                raise ValueError("empty info")
+            return info
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "Too Many Requests" in str(e) or \
+                            "Expecting value" in str(e)
+            if is_rate_limit and attempt < max_retries:
+                wait = base_wait * (attempt + 1)
+                print(f"  [RATE LIMIT] {ticker}: περιμένω {wait}s "
+                      f"(προσπάθεια {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            raise
+
+
 def tier0_filter(universe: pd.DataFrame, dry_run: bool = False) -> pd.DataFrame:
     """
     Pre-filter using yfinance (unofficial, free).
@@ -272,6 +308,7 @@ def tier0_filter(universe: pd.DataFrame, dry_run: bool = False) -> pd.DataFrame:
     total = len(universe)
     print(f"\nTier-0: {total} stocks | PE<{TIER0_PE_MAX} · PB<{TIER0_PB_MAX} · EPS>0 · MCap>$1B\n")
 
+    consecutive_failures = 0
     for _, row in universe.iterrows():
         ticker = str(row["ticker"])
         sector = GICS_TO_SECTOR.get(str(row.get("gics_sector", "")), "Unknown")
@@ -281,8 +318,17 @@ def tier0_filter(universe: pd.DataFrame, dry_run: bool = False) -> pd.DataFrame:
             candidates.append({"ticker": ticker, "name": name, "sector": sector})
             continue
 
+        # FIX K: αν αποτύχουν 10 στη σειρά, είναι IP-level block, όχι
+        # μεμονωμένα προβλήματα ανά ticker — σταματάμε αντί να σπαταλάμε
+        # χρόνο σε retries που δεν θα πετύχουν ποτέ.
+        if consecutive_failures >= 10:
+            print(f"\n[ABORT] {consecutive_failures} συνεχόμενες αποτυχίες — πιθανό IP block "
+                  f"από Yahoo στο GitHub Actions runner. Δοκίμασε --dry-run ή τρέξε τοπικά.")
+            break
+
         try:
-            info  = yf.Ticker(ticker).info
+            info  = _yfinance_info_with_retry(ticker)
+            consecutive_failures = 0
             pe    = info.get("trailingPE")
             pb    = info.get("priceToBook")
             eps   = info.get("trailingEps")
@@ -306,8 +352,9 @@ def tier0_filter(universe: pd.DataFrame, dry_run: bool = False) -> pd.DataFrame:
         except Exception as e:
             print(f"  ? {ticker:<8}  {e}")
             skipped += 1
+            consecutive_failures += 1
 
-        time.sleep(0.3)
+        time.sleep(1.5)  # FIX K: 0.3s ήταν πολύ επιθετικό για shared GH Actions IP
 
     result = pd.DataFrame(candidates)
     print(f"\nResult: {len(candidates)} pass / {skipped} excluded / {total} total")
