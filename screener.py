@@ -5,21 +5,44 @@ from email.mime.text import MIMEText
 from report import build_html
 
 BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
-# FIX F: configurable filename — έτσι μπορείς να τρέξεις ξεχωριστά US
-# (watchlist.csv) και Ευρώπη (watchlist_europe.csv) χωρίς αλλαγή κώδικα,
-# π.χ. WATCHLIST_FILE=watchlist_europe.csv python screener.py
+# FIX F/G: WATCHLIST_FILE δέχεται comma-separated λίστα CSVs — έτσι ένα
+# run μπορεί να καλύψει SP500 + Ευρώπη + Ασία μαζί, π.χ.:
+#   WATCHLIST_FILE=watchlist.csv,watchlist_europe.csv,watchlist_asia.csv
+def _load_watchlist(spec: str) -> pd.DataFrame:
+    files = [f.strip() for f in spec.split(",") if f.strip()]
+    frames = []
+    for f in files:
+        path = os.path.join(BASE_DIR, f)
+        if os.path.exists(path):
+            frames.append(pd.read_csv(path))
+        else:
+            print(f"[WARNING] watchlist file δεν βρέθηκε: {path} — skip")
+    if not frames:
+        raise FileNotFoundError(f"Κανένα watchlist file δεν βρέθηκε από: {spec}")
+    combined = pd.concat(frames, ignore_index=True)
+    before   = len(combined)
+    combined = combined.drop_duplicates(subset="ticker", keep="first")
+    if len(combined) < before:
+        print(f"[INFO] Αφαιρέθηκαν {before - len(combined)} duplicate tickers "
+              f"μεταξύ των watchlist αρχείων")
+    return combined
+
 WATCHLIST_FILE = os.environ.get("WATCHLIST_FILE", "watchlist.csv")
-WATCHLIST      = pd.read_csv(os.path.join(BASE_DIR, WATCHLIST_FILE))
-ALPHA_KEY      = os.environ.get("ALPHA_KEY", "")
+WATCHLIST      = _load_watchlist(WATCHLIST_FILE)
+ALPHA_KEY      = os.environ.get("ALPHA_KEY", "")  # πλέον προαιρετικό, δεν χρησιμοποιείται
 
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
 TERMINAL_GROWTH = 0.025
-# FIX C: batch size configurable via env var — Alpha Vantage FREE tier is
-# 25 calls/day, 5/min. 40 tickers/week ξεπερνά το free tier αν δεν έχεις
-# premium key. Έλεγξε το tier σου στο alphavantage.co/premium/ και βάλε
-# AV_BATCH_SIZE στα GitHub Secrets αν χρειάζεται μικρότερο batch.
-BATCH_SIZE      = int(os.environ.get("AV_BATCH_SIZE", "40"))
+# FIX G: το AV batch-limit (25/ημέρα) δεν υπάρχει πια — yfinance δεν έχει
+# επίσημο daily cap. SCREEN_ALL=1 (default) τρέχει ΟΛΟ το watchlist κάθε
+# φορά. Βάλε SCREEN_ALL=0 + BATCH_SIZE για να επιστρέψεις σε batching
+# (π.χ. αν το yfinance αρχίσει να μπλοκάρει σε πολύ μεγάλα runs).
+SCREEN_ALL      = os.environ.get("SCREEN_ALL", "1") == "1"
+BATCH_SIZE      = int(os.environ.get("BATCH_SIZE", "10000"))
+# Delay μεταξύ tickers — προστασία από soft-blocking της Yahoo σε πολύ
+# γρήγορα διαδοχικά requests. Full universe (~950 tickers) × 0.6s ≈ 10 λεπτά.
+REQUEST_DELAY   = float(os.environ.get("REQUEST_DELAY", "0.6"))
 
 # FIX D: sectors όπου το FCF proxy (EPS × 0.7) δεν είναι αξιόπιστο για DCF.
 # Τράπεζες/ασφαλιστικές δεν έχουν "free cash flow" με την κλασική έννοια —
@@ -30,9 +53,10 @@ BATCH_SIZE      = int(os.environ.get("AV_BATCH_SIZE", "40"))
 DCF_UNRELIABLE_SECTORS = {"Financials"}
 
 # ─────────────────────────────────────────────────────────────────────
-# FIX A: Alpha Vantage sector name normalization
-# AV επιστρέφει "Financial Services", "Health Care" κλπ.
-# Τα δικά μας ονόματα: "Financials", "Healthcare" κλπ.
+# FIX A: Sector name normalization (πηγή: yfinance .info['sector'],
+# προηγουμένως Alpha Vantage). yfinance χρησιμοποιεί ήδη πιο κοντινά στα
+# δικά μας ονόματα (π.χ. ήδη "Consumer Cyclical"/"Consumer Defensive"),
+# αλλά κρατάμε το map ως ασφάλεια για ό,τι δεν ταιριάζει 1:1.
 # Fallback μόνο — primary source είναι πάντα το watchlist.csv
 # ─────────────────────────────────────────────────────────────────────
 SECTOR_AV_MAP = {
@@ -102,43 +126,77 @@ SECTOR_BASE_RISK = {
 }
 
 
-def alpha_get(function, symbol, extra={}, retries=2):
+def get_fundamentals_yfinance(ticker: str) -> dict | None:
     """
-    FIX C: retry με backoff όταν χτυπάμε rate limit (AV επιστρέφει "Note"
-    ή "Information" αντί για data όταν έχεις εξαντλήσει το quota).
-    Πριν έσκαγε αμέσως· τώρα περιμένει και ξαναδοκιμάζει πριν τα παρατήσει.
+    FIX G (η ουσιαστική αλλαγή): αντικαθιστά εντελώς το Alpha Vantage
+    OVERVIEW ως πηγή fundamentals. Γιατί:
+      - AV free tier: 25 calls/ημέρα, αδύνατο για SP500+Ευρώπη+Ασία (~950 tickers)
+      - yfinance: κανένα επίσημο daily cap, καλύπτει ήδη .DE/.L/.PA/.T/.HK
+      - Μία κλήση yf.Ticker(ticker).info δίνει ΚΑΙ fundamentals ΚΑΙ τιμή —
+        1 network call/ticker αντί για 2 (AV OVERVIEW + yfinance price ξεχωριστά)
+
+    ΓΝΩΣΤΟΣ ΠΕΡΙΟΡΙΣΜΟΣ (να το ξέρεις): yfinance είναι unofficial
+    (reverse-engineered από Yahoo Finance), όχι επίσημο API. Τα ονόματα
+    πεδίων στο .info έχουν αλλάξει στο παρελθόν μεταξύ εκδόσεων χωρίς
+    προειδοποίηση, και η Yahoo μπορεί να μπλοκάρει IP σε πολύ επιθετικό
+    scraping (γι' αυτό κρατάμε delay μεταξύ tickers). Αν κάποια μέρα
+    σπάσει μαζικά, το FMP paid tier είναι το replacement — βλ. σχόλιο
+    στο README.
+
+    Επιστρέφει dict με ΤΑ ΙΔΙΑ keys που παλιά έδινε το AV OVERVIEW, ώστε
+    η υπόλοιπη screen_ticker() να μη χρειάζεται αλλαγή.
     """
-    url    = "https://www.alphavantage.co/query"
-    params = {"function": function, "symbol": symbol, "apikey": ALPHA_KEY, **extra}
-    for attempt in range(retries + 1):
-        r    = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        if "Note" in data or "Information" in data:
-            msg = data.get("Note") or data.get("Information")
-            if attempt < retries:
-                wait = 60 * (attempt + 1)
-                print(f"[RATE LIMIT] {symbol}: {msg[:120]} — περιμένω {wait}s "
-                      f"(προσπάθεια {attempt+1}/{retries})")
-                time.sleep(wait)
-                continue
-            raise ValueError(f"Rate limit εξαντλήθηκε: {msg}")
-        if "Error Message" in data:
-            raise ValueError(data["Error Message"])
-        return data
-    raise ValueError("alpha_get: εξαντλήθηκαν οι προσπάθειες")
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info
+        if not info or not (info.get("symbol") or info.get("longName")):
+            return None
+
+        # yfinance debtToEquity: percentage scale (π.χ. 140.3 = D/E 1.403)
+        # AV DebtToEquityRatio ήταν raw ratio scale (π.χ. 1.40) — ο υπόλοιπος
+        # κώδικας (risk_score, fragility) περιμένει raw ratio. Normalize εδώ.
+        de_raw = info.get("debtToEquity")
+        de_norm = (de_raw / 100) if de_raw is not None else None
+
+        # yfinance dividendYield: ιστορικά ασυνεπές μεταξύ εκδόσεων (άλλες
+        # φορές decimal fraction 0.024, άλλες ήδη-percentage 2.4). Defensive:
+        # αν η τιμή >1, υποθέτουμε ότι είναι ήδη percentage.
+        div_raw = info.get("dividendYield")
+        div_norm = None
+        if div_raw is not None:
+            div_norm = (div_raw / 100) if div_raw > 1 else div_raw
+
+        price = (info.get("currentPrice") or info.get("regularMarketPrice")
+                  or info.get("previousClose"))
+
+        return {
+            "Symbol":                     info.get("symbol", ticker),
+            "TrailingPE":                 info.get("trailingPE"),
+            "PriceToBookRatio":           info.get("priceToBook"),
+            "EPS":                        info.get("trailingEps"),
+            "Beta":                       info.get("beta"),
+            "DebtToEquityRatio":          de_norm,
+            "ReturnOnEquityTTM":          info.get("returnOnEquity"),
+            "DividendYield":              div_norm,
+            "AnalystTargetPrice":         info.get("targetMeanPrice"),
+            "52WeekHigh":                 info.get("fiftyTwoWeekHigh"),
+            "52WeekLow":                  info.get("fiftyTwoWeekLow"),
+            "QuarterlyEarningsGrowthYOY": info.get("earningsQuarterlyGrowth"),
+            "EVToEBITDA":                 info.get("enterpriseToEbitda"),
+            "50DayMovingAverage":         info.get("fiftyDayAverage"),
+            "Sector":                     info.get("sector", "Unknown"),
+            "_price":                     price,
+        }
+    except Exception as e:
+        print(f"[YFINANCE] {ticker}: αποτυχία fetch fundamentals — {e}")
+        return None
 
 
 def get_price_yfinance(ticker: str):
     """
-    FIX E (κρίσιμο): πραγματική τιμή αγοράς από yfinance αντί για
-    ανακατασκευή EPS × trailing PE από το AV OVERVIEW endpoint.
-
-    Πρόβλημα με την παλιά προσέγγιση: το OVERVIEW δίνει trailing EPS/PE
-    που μπορεί να υστερούν quarters· το γινόμενό τους ΔΕΝ είναι η
-    σημερινή τιμή της μετοχής, απλά τη "μαντεύει". Κάθε MoS υπολογισμός
-    (DCF, Graham) βασίζεται πάνω σε αυτή την τιμή — λάθος τιμή = λάθος
-    σήμα undervalued/overvalued σε όλο το pipeline.
+    Fallback μόνο — χρησιμοποιείται όταν το get_fundamentals_yfinance()
+    δεν είχε τιμή στο ίδιο response (π.χ. currentPrice/regularMarketPrice
+    λείπουν από το .info για κάποιο ticker).
     """
     try:
         import yfinance as yf
@@ -154,7 +212,7 @@ def get_price_yfinance(ticker: str):
         if price and price > 0:
             return round(float(price), 2)
     except Exception as e:
-        print(f"[PRICE] yfinance απέτυχε για {ticker}: {e}")
+        print(f"[PRICE] yfinance fallback απέτυχε για {ticker}: {e}")
     return None
 
 def safe_float(val, default=0):
@@ -263,9 +321,9 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
     This caused all financial/healthcare stocks to fail the sector filter silently.
     """
     try:
-        ov = alpha_get("OVERVIEW", ticker)
-        if not ov or not ov.get("Symbol"):
-            raise ValueError("Empty overview")
+        ov = get_fundamentals_yfinance(ticker)
+        if not ov:
+            raise ValueError("Δεν βρέθηκαν δεδομένα (yfinance)")
 
         pe        = safe_float(ov.get("TrailingPE"))           or None
         pb        = safe_float(ov.get("PriceToBookRatio"))     or None
@@ -291,12 +349,14 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             print(f"  [sector] {ticker}: AV='{av_sector}' → normalized='{sector}'")
         # ─────────────────────────────────────────────────────────────
 
-        # FIX E: πραγματική τιμή από yfinance πρώτα· AV EPS×PE reconstruction
-        # μόνο ως έσχατο fallback, με ρητή προειδοποίηση ότι είναι λιγότερο αξιόπιστη.
-        price = get_price_yfinance(ticker)
+        # FIX G: τιμή έρχεται μαζί με τα fundamentals από το ίδιο yfinance
+        # .info call (ov["_price"]) — μηδενικό επιπλέον network cost.
+        # Fallback σε ξεχωριστό yfinance call μόνο αν λείπει, μετά σε
+        # EPS×PE reconstruction ως έσχατη λύση.
+        price = ov.get("_price") or get_price_yfinance(ticker)
         if not price and eps and pe:
             price = round(abs(eps) * abs(pe), 2)
-            print(f"[PRICE WARNING] {ticker}: yfinance μη διαθέσιμο — "
+            print(f"[PRICE WARNING] {ticker}: yfinance χωρίς τιμή — "
                   f"fallback σε EPS×PE reconstruction (λιγότερο αξιόπιστο)")
         if not price and ma50 > 0:
             price = ma50
@@ -398,9 +458,14 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
 
 def get_batch(df: pd.DataFrame, week_number: int):
     """
-    Returns current batch as DataFrame slice — preserves all columns
-    including 'sector' for passing to screen_ticker().
+    FIX G: SCREEN_ALL=1 (default) → επιστρέφει ΟΛΟ το watchlist, καμία
+    διαίρεση σε batches. Χωρίς το AV daily cap δεν χρειάζεται πια —
+    και λύνει άμεσα το "θέλω να αξιολογούνται όλες οι μετοχές".
+    Batching παραμένει διαθέσιμο (SCREEN_ALL=0) ως safety valve.
     """
+    if SCREEN_ALL:
+        print(f"Week {week_number} → FULL UNIVERSE ({len(df)} μετοχές, χωρίς batching)")
+        return df.copy(), 1, 1
     total     = len(df)
     n_batches = max(1, -(-total // BATCH_SIZE))
     batch_idx = (week_number - 1) % n_batches
@@ -498,6 +563,91 @@ def claude_summary(stocks_json, batch_info):
     return msg.content[0].text
 
 
+HISTORY_FILE = os.path.join(BASE_DIR, "history.csv")
+# Μετά από πόσες ημέρες να εμφανίζεται μια παλιά πρόταση στο performance
+# tracker (αποφεύγει θόρυβο με μετοχές που φλαγκαρίστηκαν πριν 2 ημέρες)
+PERFORMANCE_MIN_DAYS = 21
+
+
+def record_history(shortlist_df: pd.DataFrame):
+    """
+    FIX H (ιστορικότητα): αποθηκεύει κάθε νέο shortlist pick σε history.csv
+    ώστε το επόμενο run να μπορεί να συγκρίνει "τι πρότεινα τότε vs τι
+    έγινε μετά". Append-only — δεν διαγράφει παλιά entries.
+
+    ΠΡΟΣΟΧΗ: αυτό το αρχείο πρέπει να γίνεται git commit από το GitHub
+    Action μετά το run, αλλιώς χάνεται στο επόμενο run (ephemeral runner
+    filesystem). Δες το ενημερωμένο screener.yml.
+    """
+    if shortlist_df.empty:
+        return
+    today = datetime.date.today().isoformat()
+    new_rows = shortlist_df[["ticker", "sector", "price", "dcf_base_mos",
+                              "graham_mos", "risk"]].copy()
+    new_rows["date_flagged"]  = today
+    new_rows["risk_overall"]  = new_rows["risk"].apply(
+        lambda r: r.get("overall") if isinstance(r, dict) else None)
+    new_rows = new_rows.drop(columns=["risk"])
+    new_rows = new_rows.rename(columns={"price": "price_at_flag"})
+
+    if os.path.exists(HISTORY_FILE):
+        existing = pd.read_csv(HISTORY_FILE)
+        combined = pd.concat([existing, new_rows], ignore_index=True)
+    else:
+        combined = new_rows
+    combined.to_csv(HISTORY_FILE, index=False)
+    print(f"[HISTORY] Καταγράφηκαν {len(new_rows)} νέα picks → {HISTORY_FILE} "
+          f"(σύνολο: {len(combined)} εγγραφές)")
+
+
+def check_performance() -> pd.DataFrame:
+    """
+    Διαβάζει το history.csv, βρίσκει picks παλαιότερα από
+    PERFORMANCE_MIN_DAYS, τραβάει ΤΡΕΧΟΥΣΑ τιμή (yfinance) και υπολογίζει
+    πραγματική απόδοση από τη στιγμή που φλαγκαρίστηκαν.
+
+    Επιστρέφει DataFrame: ticker, date_flagged, price_at_flag,
+    price_now, return_pct, days_held. Άδειο αν δεν υπάρχει ιστορικό ακόμα.
+    """
+    if not os.path.exists(HISTORY_FILE):
+        print("[PERFORMANCE] Δεν υπάρχει ακόμα history.csv — πρώτο run.")
+        return pd.DataFrame()
+
+    hist  = pd.read_csv(HISTORY_FILE)
+    hist["date_flagged"] = pd.to_datetime(hist["date_flagged"])
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=PERFORMANCE_MIN_DAYS)
+    eligible = hist[hist["date_flagged"] <= cutoff].copy()
+    if eligible.empty:
+        print(f"[PERFORMANCE] Καμία πρόταση >{PERFORMANCE_MIN_DAYS} ημερών ακόμα.")
+        return pd.DataFrame()
+
+    # Κρατάμε μόνο το ΠΡΩΤΟ flag ανά ticker (αποφεύγει duplicate rows αν
+    # η ίδια μετοχή προτάθηκε ξανά αργότερα)
+    eligible = eligible.sort_values("date_flagged").drop_duplicates(
+        subset="ticker", keep="first")
+
+    rows = []
+    for _, r in eligible.iterrows():
+        current = get_price_yfinance(r["ticker"])
+        if current is None:
+            continue
+        ret_pct = round((current - r["price_at_flag"]) / r["price_at_flag"] * 100, 1)
+        days    = (datetime.datetime.now() - r["date_flagged"]).days
+        rows.append({
+            "ticker":        r["ticker"],
+            "date_flagged":  r["date_flagged"].date().isoformat(),
+            "price_at_flag": r["price_at_flag"],
+            "price_now":     current,
+            "return_pct":    ret_pct,
+            "days_held":     days,
+        })
+        time.sleep(REQUEST_DELAY)
+
+    result = pd.DataFrame(rows).sort_values("return_pct", ascending=False)
+    print(f"[PERFORMANCE] {len(result)} παλιές προτάσεις με tracked απόδοση")
+    return result
+
+
 def send_email(html_body, week_number, batch_idx, n_batches):
     sender   = os.environ["EMAIL_SENDER"]
     password = os.environ["EMAIL_PASSWORD"]
@@ -530,7 +680,7 @@ if __name__ == "__main__":
     # θα έμπλοκε ΚΑΙ κάθε ευρωπαϊκό ticker (SAP.DE, ULVR.L, MC.PA). Τώρα
     # επιτρέπονται ρητά τα γνωστά exchange suffixes· ό,τι άλλο έχει τελεία
     # συνεχίζει να παραλείπεται όπως πριν.
-    INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW")
+    INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW", ".T", ".HK")
 
     results = []
     for _, row in batch_df.iterrows():
@@ -544,7 +694,7 @@ if __name__ == "__main__":
         wm = str(row["market"]) if "market" in row.index and pd.notna(row["market"]) else "US"
         print(f"Fetching {ticker} (sector: {ws}, market: {wm})...")
         results.append(screen_ticker(ticker, watchlist_sector=ws, watchlist_market=wm))
-        time.sleep(13)
+        time.sleep(REQUEST_DELAY)
 
     valid = [r for r in results if r]
     if not valid:
@@ -586,6 +736,11 @@ if __name__ == "__main__":
     # FIX B: soft sector filter
     shortlist = apply_filters(df, favored_sectors=favored_sectors)
 
+    # FIX H: ιστορικότητα — performance παλιών picks ΠΡΙΝ γράψουμε νέα,
+    # μετά καταγραφή των νέων για το επόμενο run
+    performance_df = check_performance()
+    record_history(shortlist)
+
     summary = ""
     if not shortlist.empty and os.environ.get("ANTHROPIC_API_KEY"):
         cols = ["ticker", "price", "dcf_bear", "dcf_base", "dcf_bull",
@@ -596,5 +751,6 @@ if __name__ == "__main__":
 
     html = build_html(df, shortlist, summary, macro_html=macro_html,
                       alignment_map=alignment_map,
-                      batch_idx=batch_idx, n_batches=n_batches)
+                      batch_idx=batch_idx, n_batches=n_batches,
+                      performance_df=performance_df)
     send_email(html, week_number, batch_idx, n_batches)
