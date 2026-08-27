@@ -17,7 +17,6 @@ RF,Regions Financial,Financials
 CFG,Citizens Financial,Financials
 HBAN,Huntington Bancshares,Financials
 KEY,KeyCorp,Financials
-FRC,First Republic Bank,Financials
 FITB,Fifth Third Bancorp,Financials
 XOM,Exxon Mobil,Energy
 CVX,Chevron,Energy
@@ -34,14 +33,13 @@ HAL,Halliburton,Energy
 BKR,Baker Hughes,Energy
 FANG,Diamondback Energy,Energy
 MRO,Marathon Oil,Energy
-PXD,Pioneer Natural Resources,Energy
 UNH,UnitedHealth Group,Healthcare
 CVS,CVS Health,Healthcare
 CI,Cigna,Healthcare
 HUM,Humana,Healthcare
 ELV,Elevance Health,Healthcare
 MCK,McKesson,Healthcare
-ABC,AmerisourceBergen,Healthcare
+COR,Cencora,Healthcare
 CAH,Cardinal Health,Healthcare
 JNJ,Johnson & Johnson,Healthcare
 PFE,Pfizer,Healthcare
@@ -225,4 +223,3 @@ CTRA,Coterra Energy,Energy
 OVV,Ovintiv,Energy
 RRC,Range Resources,Energy
 NOV,NOV Inc,Energy
-MRO,Marathon Oil,Energy
