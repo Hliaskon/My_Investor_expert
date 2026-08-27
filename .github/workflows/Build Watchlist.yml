@@ -14,6 +14,11 @@ on:
           - asia
           - china_adr
           - all
+      dry_run:
+        description: 'dry-run (χωρίς yfinance Tier-0 filter — παίρνει ΟΛΑ τα tickers χωρίς έλεγχο PE/PB, χρήσιμο αν η Yahoo μπλοκάρει)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -31,7 +36,12 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Build watchlist
-        run: python build_watchlist.py --market ${{ inputs.market }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python build_watchlist.py --market ${{ inputs.market }} --dry-run
+          else
+            python build_watchlist.py --market ${{ inputs.market }}
+          fi
 
       - name: Commit το νέο watchlist CSV
         run: |
