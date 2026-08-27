@@ -27,12 +27,10 @@ MPC,Marathon Petroleum,Energy
 PSX,Phillips 66,Energy
 VLO,Valero Energy,Energy
 DVN,Devon Energy,Energy
-HES,Hess,Energy
 OXY,Occidental Petroleum,Energy
 HAL,Halliburton,Energy
 BKR,Baker Hughes,Energy
 FANG,Diamondback Energy,Energy
-MRO,Marathon Oil,Energy
 UNH,UnitedHealth Group,Healthcare
 CVS,CVS Health,Healthcare
 CI,Cigna,Healthcare
@@ -88,7 +86,6 @@ MO,Altria,Consumer Defensive
 PM,Philip Morris,Consumer Defensive
 KHC,Kraft Heinz,Consumer Defensive
 GIS,General Mills,Consumer Defensive
-K,Kellogg,Consumer Defensive
 CPB,Campbell Soup,Consumer Defensive
 CL,Colgate-Palmolive,Consumer Defensive
 CLX,Clorox,Consumer Defensive
@@ -119,7 +116,6 @@ WBD,Warner Bros Discovery,Communication Services
 FOXA,Fox Corporation,Communication Services
 NWS,News Corp,Communication Services
 OMC,Omnicom Group,Communication Services
-IPG,Interpublic Group,Communication Services
 BRK-B,Berkshire Hathaway,Financials
 MTN,Vail Resorts,Consumer Cyclical
 F,Ford Motor,Consumer Cyclical
@@ -164,7 +160,6 @@ EMN,Eastman Chemical,Basic Materials
 PPG,PPG Industries,Basic Materials
 RPM,RPM International,Basic Materials
 IP,International Paper,Basic Materials
-WRK,WestRock,Basic Materials
 PKG,Packaging Corp of America,Basic Materials
 NEM,Newmont,Basic Materials
 LIN,Linde,Basic Materials
