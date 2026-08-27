@@ -64,6 +64,15 @@ TIER0_PB_MAX   = 6      # excludes AAPL 50x, MSFT 14x
 TIER0_EPS_MIN  = 0      # must be profitable
 TIER0_MCAP_MIN = 1e9    # $1B+
 
+# FIX M (πείραμα): ίδιο rationale με το screener.py — curl_cffi session
+# με browser-impersonation, δοκιμή ενάντια στο 429 IP-block της Yahoo.
+try:
+    from curl_cffi import requests as _curl_requests
+    _YF_SESSION = _curl_requests.Session(impersonate="chrome")
+except Exception as _e:
+    print(f"[WARNING] curl_cffi δεν φορτώθηκε ({_e}) — fallback σε default yfinance session")
+    _YF_SESSION = None
+
 
 def fetch_sp500() -> pd.DataFrame:
     print("Fetching S&P 500 from Wikipedia...")
@@ -99,7 +108,13 @@ def fetch_dax(suffix: str = ".DE") -> pd.DataFrame:
                 df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
                 if "gics_sector" not in df.columns:
                     df["gics_sector"] = "Unknown"
-                df["ticker"] = df["ticker"].astype(str).str.strip() + suffix
+                # FIX N: το Wikipedia table ήδη περιέχει σωστό suffix σε
+                # κάποιες γραμμές (π.χ. "AIR.PA" — Airbus trades στο Euronext
+                # Paris, όχι Xetra). Πριν πρόσθετε τυφλά → "AIR.PA.DE". Τώρα
+                # προσθέτει μόνο αν λείπει εντελώς suffix.
+                df["ticker"] = df["ticker"].astype(str).str.strip()
+                df["ticker"] = df["ticker"].where(df["ticker"].str.contains(r"\."),
+                                                    df["ticker"] + suffix)
                 df["market"] = "Germany"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
@@ -123,7 +138,10 @@ def fetch_ftse100(suffix: str = ".L") -> pd.DataFrame:
                 df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
                 if "gics_sector" not in df.columns:
                     df["gics_sector"] = "Unknown"
-                df["ticker"] = df["ticker"].astype(str).str.strip() + suffix
+                # FIX N: ίδιο rationale με DAX — προστασία από διπλά suffixes
+                df["ticker"] = df["ticker"].astype(str).str.strip()
+                df["ticker"] = df["ticker"].where(df["ticker"].str.contains(r"\."),
+                                                    df["ticker"] + suffix)
                 df["market"] = "UK"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
@@ -278,7 +296,7 @@ def _yfinance_info_with_retry(ticker: str, max_retries: int = 3, base_wait: int 
     for attempt in range(max_retries + 1):
         try:
             import yfinance as yf
-            info = yf.Ticker(ticker).info
+            info = yf.Ticker(ticker, session=_YF_SESSION).info
             if not info:
                 raise ValueError("empty info")
             return info
