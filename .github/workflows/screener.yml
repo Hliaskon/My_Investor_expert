@@ -41,6 +41,10 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add history.csv
-          git diff --staged --quiet || git commit -m "chore: update screener history [skip ci]"
-          git push
+          if [ -f history.csv ]; then
+            git add history.csv
+            git diff --staged --quiet || git commit -m "chore: update screener history [skip ci]"
+            git push
+          else
+            echo "history.csv δεν υπάρχει ακόμα (καμία μετοχή δεν πέρασε τα φίλτρα σε αυτό το run) — τίποτα να γίνει commit."
+          fi
