@@ -2,8 +2,13 @@ name: Stock Screener
 
 on:
   schedule:
-    - cron: '0 6 * * 0'
+    - cron: '0 6 * * 0'   # κάθε Κυριακή 06:00 UTC — SCREEN_ALL=1 τρέχει ΟΛΟ το universe
   workflow_dispatch:
+
+# FIX H: contents:write χρειάζεται για να κάνει commit το history.csv
+# (ιστορικότητα προτάσεων) πίσω στο repo μετά από κάθε run.
+permissions:
+  contents: write
 
 jobs:
   screen:
@@ -23,6 +28,19 @@ jobs:
           EMAIL_PASSWORD:    ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER:    ${{ secrets.EMAIL_RECEIVER }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ALPHA_KEY:         ${{ secrets.ALPHA_KEY }}
           FRED_API_KEY:      ${{ secrets.FRED_API_KEY }}
+          # FIX G: ALPHA_KEY αφαιρέθηκε — το screener.py χρησιμοποιεί πλέον
+          # yfinance για fundamentals, όχι Alpha Vantage. Το secret μπορείς
+          # να το αφήσεις στο repo (δεν πειράζει), απλά δεν διαβάζεται πια.
+          # WATCHLIST_FILE: comma-separated για να συνδυάσεις αγορές, π.χ.
+          #   watchlist.csv,watchlist_europe.csv,watchlist_asia.csv
+          WATCHLIST_FILE:    ${{ vars.WATCHLIST_FILE || 'watchlist.csv' }}
         run: python screener.py
+
+      - name: Commit ιστορικότητας (history.csv)
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add history.csv
+          git diff --staged --quiet || git commit -m "chore: update screener history [skip ci]"
+          git push
