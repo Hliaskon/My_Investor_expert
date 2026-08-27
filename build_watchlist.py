@@ -176,6 +176,55 @@ def fetch_china_adr() -> pd.DataFrame:
     return df
 
 
+def fetch_nikkei225(suffix: str = ".T") -> pd.DataFrame:
+    """Nikkei 225 (Ιαπωνία, Tokyo Stock Exchange). Wikipedia: 'Nikkei 225' page."""
+    print("Fetching Nikkei 225 (Ιαπωνία) από Wikipedia...")
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Nikkei_225")
+        for t in tables:
+            tick_col = _find_col(t, ["code", "ticker", "symbol"])
+            name_col = _find_col(t, ["company", "name"])
+            sect_col = _find_col(t, ["sector", "industry"])
+            if tick_col and name_col:
+                df = t[[tick_col, name_col] + ([sect_col] if sect_col else [])].copy()
+                df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
+                if "gics_sector" not in df.columns:
+                    df["gics_sector"] = "Unknown"
+                # Tokyo codes είναι 4-ψήφιοι αριθμοί (π.χ. 7203 = Toyota) → 7203.T
+                df["ticker"] = df["ticker"].astype(str).str.strip().str.zfill(4) + suffix
+                df["market"] = "Japan"
+                print(f"  {len(df)} tickers")
+                return df[["ticker", "name", "gics_sector", "market"]]
+    except Exception as e:
+        print(f"  [WARNING] Nikkei 225 fetch απέτυχε: {e}")
+    return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
+
+
+def fetch_hang_seng(suffix: str = ".HK") -> pd.DataFrame:
+    """Hang Seng Index (Χονγκ Κονγκ, HKEX). Wikipedia: 'Hang Seng Index' page."""
+    print("Fetching Hang Seng (Χονγκ Κονγκ) από Wikipedia...")
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Hang_Seng_Index")
+        for t in tables:
+            tick_col = _find_col(t, ["ticker", "sehk", "stock code", "code"])
+            name_col = _find_col(t, ["company", "name"])
+            sect_col = _find_col(t, ["sector", "industry", "sub-index"])
+            if tick_col and name_col:
+                df = t[[tick_col, name_col] + ([sect_col] if sect_col else [])].copy()
+                df.columns = ["ticker", "name"] + (["gics_sector"] if sect_col else [])
+                if "gics_sector" not in df.columns:
+                    df["gics_sector"] = "Unknown"
+                # HKEX codes είναι 4-ψήφιοι αριθμοί (π.χ. 0700 = Tencent) → 0700.HK
+                df["ticker"] = (df["ticker"].astype(str).str.strip()
+                                 .str.replace(r"\D", "", regex=True).str.zfill(4) + suffix)
+                df["market"] = "Hong Kong"
+                print(f"  {len(df)} tickers")
+                return df[["ticker", "name", "gics_sector", "market"]]
+    except Exception as e:
+        print(f"  [WARNING] Hang Seng fetch απέτυχε: {e}")
+    return pd.DataFrame(columns=["ticker", "name", "gics_sector", "market"])
+
+
 def fetch_nasdaq100_extras(sp500_set: set) -> pd.DataFrame:
     print("Fetching NASDAQ 100 additions...")
     try:
@@ -258,10 +307,10 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run",    action="store_true",
                         help="Skip yfinance Tier-0 filter — include ό,τι βρέθηκε")
     parser.add_argument("--sp500-only", action="store_true")
-    parser.add_argument("--market", choices=["sp500", "europe", "china_adr", "all"],
+    parser.add_argument("--market", choices=["sp500", "europe", "asia", "china_adr", "all"],
                         default="sp500",
-                        help="sp500 (default, US) | europe (DAX+FTSE100+EuroStoxx50) | "
-                             "china_adr (US-listed China ADRs, curated) | all")
+                        help="sp500 (US) | europe (DAX+FTSE100+EuroStoxx50) | "
+                             "asia (Nikkei225+HangSeng) | china_adr (US-listed ADRs) | all")
     args = parser.parse_args()
 
     frames = []
@@ -277,6 +326,10 @@ if __name__ == "__main__":
         frames.append(fetch_ftse100())
         frames.append(fetch_euro_stoxx50())
 
+    if args.market in ("asia", "all"):
+        frames.append(fetch_nikkei225())
+        frames.append(fetch_hang_seng())
+
     if args.market in ("china_adr", "all"):
         frames.append(fetch_china_adr())
 
@@ -289,7 +342,8 @@ if __name__ == "__main__":
 
     default_output = {
         "sp500": "watchlist.csv", "europe": "watchlist_europe.csv",
-        "china_adr": "watchlist_china_adr.csv", "all": "watchlist_all.csv",
+        "asia": "watchlist_asia.csv", "china_adr": "watchlist_china_adr.csv",
+        "all": "watchlist_all.csv",
     }[args.market]
     output = args.output or default_output
 
