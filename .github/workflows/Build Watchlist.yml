@@ -1,0 +1,42 @@
+name: Build Watchlist
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Ποια αγορά να φτιάξω watchlist'
+        required: true
+        default: 'europe'
+        type: choice
+        options:
+          - sp500
+          - europe
+          - asia
+          - china_adr
+          - all
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Build watchlist
+        run: python build_watchlist.py --market ${{ inputs.market }}
+
+      - name: Commit το νέο watchlist CSV
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add watchlist*.csv
+          git diff --staged --quiet && echo "Καμία αλλαγή" || git commit -m "chore: build watchlist (${{ inputs.market }})"
+          git push
