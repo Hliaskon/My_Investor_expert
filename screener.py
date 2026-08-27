@@ -524,6 +524,117 @@ def get_batch(df: pd.DataFrame, week_number: int):
     return batch_df, batch_idx + 1, n_batches
 
 
+REQUIRED_FIELDS_FOR_CONFIDENCE = ["pe", "pb", "eps", "roe", "de", "ev_ebitda",
+                                    "dcf_base", "analyst_target"]
+
+
+def compute_tier(row: dict, favored_sectors=None) -> dict:
+    """
+    FIX R: αντικαθιστά το binary "DCF MoS>15% = shortlist" με πολυπαραγοντική
+    βαθμολόγηση. Γιατί το χρειαζόμαστε: ένα και μόνο κριτήριο (DCF), βασισμένο
+    σε μία και μόνο μέθοδο (crude FCF proxy), δεν είναι αρκετό σήμα για να
+    δικαιολογήσει "buy" — ο ίδιος ο Graham έλεγε να συγκλίνουν πολλαπλές
+    ανεξάρτητες εκτιμήσεις πριν εμπιστευτείς μία τιμή.
+
+    4 συνιστώσες, όλες διαφανείς (breakdown), καμία "μαύρο κουτί":
+
+    1. EPS QUALITY GATE (hard veto): αν το EPS είναι σχεδόν μηδενικό σχετικά
+       με την τιμή (<2% earnings yield), το DCF %MoS γίνεται μαθηματικά
+       ασταθές — ακριβώς έτσι έσκασε το PARA (+35616%). Αν αποτύχει αυτό το
+       gate, tier = AVOID ανεξαρτήτως όλων των άλλων.
+
+    2. DATA COMPLETENESS GATE: μετράει πόσα από τα 8 βασικά πεδία υπάρχουν
+       πραγματικά (όχι None). Αν λείπουν πάνω από τα μισά, tier ανώτατο HOLD
+       — δεν μπορεί να είναι "Strong Buy" όταν δεν ξέρουμε καν το μισό
+       προφίλ της εταιρείας.
+
+    3. VALUATION CONVERGENCE (0-40 pts): DCF MoS>20 (+15), Graham MoS>20
+       (+10), EV/EBITDA<8x (+10), Analyst upside>15% (+5). Περισσότερες
+       ανεξάρτητες μέθοδοι που συμφωνούν = ισχυρότερο σήμα.
+
+    4. QUALITY (0-30 pts, Buffett-style): ROE≥15% (+15), ROIC>WACC (+10),
+       D/E<1.0 (+5).
+
+    5. MACRO/RISK (0-20 pts): favored sector (+10), risk όχι high (+10).
+
+    Tier thresholds:
+      STRONG BUY: score≥65 ΚΑΙ completeness≥75%
+      BUY:        score≥45 ΚΑΙ completeness≥60%
+      HOLD:       score≥25, ή completeness<50%
+      AVOID:      όλα τα άλλα, ή αποτυχία EPS quality gate
+    """
+    favored_sectors = favored_sectors or []
+    b = {}
+
+    def _present(v):
+        """FIX R+O: v μπορεί να είναι pandas NaN (όχι Python None) όταν
+        έρχεται από DataFrame row — ίδιο root cause με το FIX O στο report.py."""
+        if v is None:
+            return False
+        if isinstance(v, float) and pd.isna(v):
+            return False
+        return True
+
+    present = sum(1 for f in REQUIRED_FIELDS_FOR_CONFIDENCE if _present(row.get(f)))
+    completeness = present / len(REQUIRED_FIELDS_FOR_CONFIDENCE)
+    b["data_completeness_pct"] = round(completeness * 100)
+
+    price = row.get("price")
+    eps   = row.get("eps")
+    eps_quality_ok = bool(_present(eps) and _present(price) and price > 0
+                           and abs(eps) >= 0.02 * price)
+    b["eps_quality_ok"] = eps_quality_ok
+
+    val_score = 0
+    dcf_mos = row.get("dcf_base_mos")
+    if _present(dcf_mos) and dcf_mos > 20: val_score += 15
+    graham_mos = row.get("graham_mos")
+    if _present(graham_mos) and graham_mos > 20: val_score += 10
+    ev_ebitda = row.get("ev_ebitda")
+    if _present(ev_ebitda) and 0 < ev_ebitda < 8: val_score += 10
+    upside = row.get("analyst_upside")
+    if _present(upside) and upside > 15: val_score += 5
+    b["valuation_score"] = val_score
+
+    q_score = 0
+    roe = row.get("roe")
+    if _present(roe) and roe >= 15: q_score += 15
+    if row.get("roic_vs_wacc") == "positive": q_score += 10
+    de = row.get("de")
+    if _present(de) and de < 1.0: q_score += 5
+    b["quality_score"] = q_score
+
+    m_score = 0
+    if row.get("sector") in favored_sectors: m_score += 10
+    risk = row.get("risk") or {}
+    if risk.get("overall") in ("low", "medium"): m_score += 10
+    b["macro_score"] = m_score
+
+    total = val_score + q_score + m_score
+    b["total_score"] = total
+
+    if not eps_quality_ok:
+        tier = "AVOID"
+        b["tier_reason"] = "Χαμηλή ποιότητα EPS (near-zero earnings yield) — DCF % αναξιόπιστο"
+    elif completeness < 0.5:
+        tier = "HOLD"
+        b["tier_reason"] = "Ελλιπή δεδομένα (<50% πεδίων) — ανώτατο HOLD ανεξαρτήτως score"
+    elif total >= 65 and completeness >= 0.75:
+        tier = "STRONG BUY"
+        b["tier_reason"] = f"Score {total}/90, {b['data_completeness_pct']}% δεδομένα — σύγκλιση σημάτων"
+    elif total >= 45 and completeness >= 0.6:
+        tier = "BUY"
+        b["tier_reason"] = f"Score {total}/90, {b['data_completeness_pct']}% δεδομένα"
+    elif total >= 25:
+        tier = "HOLD"
+        b["tier_reason"] = f"Score {total}/90 — μερικά θετικά σήματα, όχι αρκετά"
+    else:
+        tier = "AVOID"
+        b["tier_reason"] = f"Score {total}/90 — ανεπαρκή σήματα"
+    b["tier"] = tier
+    return b
+
+
 def apply_filters(df: pd.DataFrame, favored_sectors=None) -> pd.DataFrame:
     """
     Value investing filters with per-filter diagnostics.
@@ -572,15 +683,50 @@ def apply_filters(df: pd.DataFrame, favored_sectors=None) -> pd.DataFrame:
     print(f"[FILTER] DCF MoS >15%:  {len(f):>3}/{n2} pass | excl {len(excl)} "
           f"| {n_exempt} exempt (DCF-unreliable sector, π.χ. Financials): {excl}")
 
+    # ── FIX Q: sanity cap — DCF MoS >300% είναι σχεδόν πάντα computation
+    # artifact (μικρό/στρεβλωμένο EPS × 5ετής compound growth), όχι
+    # πραγματική ευκαιρία. Παράδειγμα που το έδειξε: PARA +35616%.
+    # Legit deep-value cyclical (π.χ. energy μετοχές σε κάτω κύκλο) μπορεί
+    # να δείξει νόμιμα 100-250% — το όριο στα 300% τα αφήνει, κόβει μόνο
+    # τα ξεκάθαρα σπασμένα.
+    MAX_SANE_MOS = 300
+    n3       = len(f)
+    absurd   = f["dcf_base_mos"].notna() & (f["dcf_base_mos"].abs() > MAX_SANE_MOS)
+    absurd_tickers = f[absurd]["ticker"].tolist()
+    f        = f[~absurd]
+    if absurd_tickers:
+        print(f"[FILTER] Sanity cap (|MoS|>{MAX_SANE_MOS}%): αφαιρέθηκαν {len(absurd_tickers)} "
+              f"πιθανά computation artifacts: {absurd_tickers}")
+
     # ── Macro: SOFT sort (NOT exclusion) ──────────────────────────────
     if favored_sectors and len(f) > 0:
         f["macro_favored"] = f["sector"].isin(favored_sectors)
         n_fav = int(f["macro_favored"].sum())
         print(f"[FILTER] Macro align:   {n_fav}/{len(f)} in favored sectors "
               f"— sorted first, others NOT excluded")
-        f = f.sort_values(["macro_favored", "dcf_base_mos"], ascending=[False, False])
     else:
         f["macro_favored"] = False
+
+    # ── FIX R: πολυπαραγοντικό tier (STRONG BUY/BUY/HOLD/AVOID) ────────
+    # αντικαθιστά το μονο-κριτηριακό DCF sort. Υπολογίζεται εδώ (όχι στο
+    # screen_ticker) γιατί χρειάζεται το favored_sectors που ξέρουμε μόνο
+    # μετά την macro classification.
+    if len(f) > 0:
+        tier_rows = f.to_dict("records")
+        tier_results = [compute_tier(r, favored_sectors) for r in tier_rows]
+        f["tier"]              = [t["tier"] for t in tier_results]
+        f["tier_score"]        = [t["total_score"] for t in tier_results]
+        f["tier_reason"]       = [t["tier_reason"] for t in tier_results]
+        f["data_completeness"] = [t["data_completeness_pct"] for t in tier_results]
+
+        TIER_ORDER = {"STRONG BUY": 0, "BUY": 1, "HOLD": 2, "AVOID": 3}
+        f["_tier_sort"] = f["tier"].map(TIER_ORDER)
+        f = f.sort_values(["_tier_sort", "tier_score"], ascending=[True, False])
+        f = f.drop(columns=["_tier_sort"])
+
+        tier_counts = f["tier"].value_counts().to_dict()
+        print(f"[FILTER] Tiers: {tier_counts}")
+    else:
         f = f.sort_values("dcf_base_mos", ascending=False)
 
     # ── ROIC warning (informational) ──────────────────────────────────
