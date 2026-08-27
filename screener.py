@@ -33,6 +33,22 @@ ALPHA_KEY      = os.environ.get("ALPHA_KEY", "")  # πλέον προαιρετ�
 
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
+
+# FIX M (πείραμα): η Yahoo μπλοκάρει (429) requests από το κοινόχρηστο
+# GitHub Actions IP pool — επιβεβαιώθηκε empirically, ακόμα και σε US
+# blue-chips (JPM, BAC, ...), όχι μόνο σε διεθνή tickers. Δοκιμάζουμε
+# curl_cffi session με browser-impersonation (μιμείται το TLS fingerprint
+# ενός πραγματικού Chrome) — η θεωρία είναι ότι η Yahoo μπλοκάρει και με
+# βάση fingerprint, όχι μόνο IP volume. ΔΕΝ το έχω δοκιμάσει live (δεν
+# έχω δικτυακή πρόσβαση σε finance.yahoo.com από το dev environment) —
+# αν αποτύχει ξανά, σημαίνει καθαρό IP-reputation block, χρειάζεται
+# διαφορετική λύση (paid API ή τοπικό/self-hosted runner).
+try:
+    from curl_cffi import requests as _curl_requests
+    _YF_SESSION = _curl_requests.Session(impersonate="chrome")
+except Exception as _e:
+    print(f"[WARNING] curl_cffi δεν φορτώθηκε ({_e}) — fallback σε default yfinance session")
+    _YF_SESSION = None
 TERMINAL_GROWTH = 0.025
 # FIX G: το AV batch-limit (25/ημέρα) δεν υπάρχει πια — yfinance δεν έχει
 # επίσημο daily cap. SCREEN_ALL=1 (default) τρέχει ΟΛΟ το watchlist κάθε
@@ -138,7 +154,7 @@ def _yfinance_info_with_retry(ticker: str, max_retries: int = 3, base_wait: int 
     import yfinance as yf
     for attempt in range(max_retries + 1):
         try:
-            info = yf.Ticker(ticker).info
+            info = yf.Ticker(ticker, session=_YF_SESSION).info
             if not info:
                 raise ValueError("empty info")
             return info
@@ -227,7 +243,7 @@ def get_price_yfinance(ticker: str):
     """
     try:
         import yfinance as yf
-        t    = yf.Ticker(ticker)
+        t    = yf.Ticker(ticker, session=_YF_SESSION)
         info = getattr(t, "fast_info", None)
         price = None
         if info is not None:
