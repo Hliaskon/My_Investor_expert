@@ -202,7 +202,7 @@ TEMPLATE = """
 
 {% if shortlist %}
 <div class="card">
-  <div class="sec">Shortlist — Πλήρης Ανάλυση</div>
+  <div class="sec">STRONG BUY / BUY — Πλήρης Ανάλυση ({{ shortlist|length }} από {{ shortlist_total }} στο shortlist — HOLD/AVOID στον πίνακα παρακάτω)</div>
   {% for r in shortlist %}
   <div class="srow">
 
@@ -314,7 +314,7 @@ TEMPLATE = """
 
 <!-- Πλήρης Λίστα -->
 <div class="card">
-  <div class="sec">Πλήρης Λίστα Batch</div>
+  <div class="sec">Πλήρης Λίστα — Top {{ all_stocks|length }}{% if total > all_stocks|length %} από {{ total }} screened (ταξινομημένα κατά DCF MoS){% endif %}</div>
   <table>
     <tr>
       <th>Ticker</th><th>Τιμή</th><th>P/E</th><th>P/B</th>
@@ -336,123 +336,19 @@ TEMPLATE = """
     </tr>
     {% endfor %}
   </table>
-</div>
-
-<!-- Οδηγός Δεικτών -->
-<div class="card" style="background:#f9f9f9">
-  <div class="sec">Οδηγός Δεικτών</div>
-  <table>
-    <tr>
-      <th style="width:130px">Δείκτης</th>
-      <th style="width:90px">Πηγή</th>
-      <th>Τι μετράει & γιατί χρησιμοποιείται</th>
-      <th style="width:200px">Threshold</th>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">P/E Ratio</td>
-      <td><span class="guide-source">Benjamin Graham</span></td>
-      <td>Τιμή μετοχής διαιρεμένη με κέρδη ανά μετοχή (EPS). Δείχνει πόσα € πληρώνεις για κάθε € κέρδους. Χαμηλό P/E = η αγορά δεν περιμένει μεγάλη ανάπτυξη — ευκαιρία για value investor. Αδυναμία: αγνοεί χρέος και ποιότητα κερδών.</td>
-      <td style="color:#1a7a4a">&lt; 15 ιδανικό<br>&lt; 20 αποδεκτό</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">P/B Ratio</td>
-      <td><span class="guide-source">Benjamin Graham</span></td>
-      <td>Τιμή προς Λογιστική Αξία (Book Value = assets minus liabilities). Αν P/B &lt; 1 η μετοχή κοστίζει λιγότερο από τα καθαρά assets της εταιρείας — σπάνια αλλά ισχυρό signal. Χρήσιμο για banks και industrials, λιγότερο για tech όπου τα assets είναι άυλα.</td>
-      <td style="color:#1a7a4a">&lt; 1.5 ιδανικό<br>&lt; 2.5 αποδεκτό</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">DCF MoS<br><small>(Base / Bear / Bull)</small></td>
-      <td><span class="guide-source">Graham + Buffett</span></td>
-      <td>Discounted Cash Flow — υπολογίζει εσωτερική αξία βάσει μελλοντικών ταμειακών ροών (5ετής ορίζοντας + terminal value). Margin of Safety = πόσο % κάτω από αυτή την αξία είναι η τρέχουσα τιμή. Bear case χρησιμοποιεί fat tail assumptions (Taleb): growth -3%, WACC +2%. Το πιο ολοκληρωμένο valuation tool.</td>
-      <td style="color:#1a7a4a">MoS &gt; 20% = buying zone<br>MoS &gt; 30% = ισχυρό</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Graham Formula</td>
-      <td><span class="guide-source">Benjamin Graham</span></td>
-      <td>Απλοποιημένη αποτίμηση: EPS × (8.5 + 2×growth%) × (4.4 / bond yield). Γρήγορη, διαχρονική, χρήσιμη ως δεύτερη γνώμη δίπλα στο DCF. Προσοχή: τείνει να υπερτιμά growth stocks και δεν λαμβάνει υπόψη χρέος.</td>
-      <td style="color:#1a7a4a">MoS &gt; 30% ισχυρό<br>Χρήση ως confirmation</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">EV/EBITDA</td>
-      <td><span class="guide-source">Hedge Funds<br>Citadel / D.E. Shaw</span></td>
-      <td>Enterprise Value (market cap + χρέος - cash) διαιρεμένο με EBITDA. Καλύτερο από P/E για εταιρείες με υψηλό χρέος ή διαφορετικές κεφαλαιακές δομές. Χρησιμοποιείται για cross-sector σύγκριση. Ο πιο δημοφιλής δείκτης σε M&A αποτιμήσεις.</td>
-      <td style="color:#1a7a4a">&lt; 8x φθηνό<br>8-12x μέτριο<br>&gt; 12x ακριβό</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">ROE Quality<br><small>(Buffett)</small></td>
-      <td><span class="guide-source">Warren Buffett</span></td>
-      <td>Return on Equity — πόσο αποδοτικά χρησιμοποιεί η εταιρεία τα κεφάλαια των μετόχων. Ο Buffett απαιτεί ROE &gt; 15% για να θεωρήσει μια εταιρεία ποιοτική. Αξιόπιστο metric — λαμβάνεται απευθείας από Alpha Vantage. Αδυναμία: εταιρείες με υψηλό leverage εμφανίζουν τεχνητά υψηλό ROE.</td>
-      <td style="color:#1a7a4a">≥ 15% ισχυρό ✓<br>10-15% αποδεκτό<br>&lt; 10% ανησυχητικό</td>
-    </tr>
-    <tr class="guide-row">
-      <td class="guide-name">ROIC est.<br><small>(proxy)</small></td>
-      <td><span class="guide-source">Graham +<br>Buffett</span></td>
-      <td>Εκτιμώμενο Return on Invested Capital = ROE × (1 / (1 + D/E)). Αφαιρεί το leverage effect από το ROE για πιο ρεαλιστική εικόνα. <strong>Σημαντικό:</strong> αυτό είναι proxy, όχι ακριβής υπολογισμός NOPAT/InvestedCapital. Χρήσιμο για σύγκριση vs WACC αλλά με επιφύλαξη. Εταιρείες με υγιές υψηλό χρέος (consumer staples) υποεκτιμώνται.</td>
-      <td>Proxy &gt; WACC = πιθανή αξία<br><span style="color:#888;font-size:10px">Χρήση ως ένδειξη μόνο</span></td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">52-Week Low<br>Proximity</td>
-      <td><span class="guide-source">Behavioral Finance<br>Kahneman / Thaler</span></td>
-      <td>Πόσο % πάνω από το 52-εβδομαδιαίο χαμηλό βρίσκεται η τιμή. Βασίζεται στο behavioral finance: οι επενδυτές υπεραντιδρούν σε bad news και πουλάνε πανικόβλητα, δημιουργώντας ευκαιρίες. Αν μια μετοχή είναι κοντά στο low αλλά τα fundamentals είναι υγιή, είναι ισχυρό contrarian signal.</td>
-      <td style="color:#1a7a4a">&lt; 15% από low = strong signal<br>15-30% = neutral<br>&gt; 30% = απομακρύνθηκε</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Fragility Score</td>
-      <td><span class="guide-source">Nassim Taleb<br>Antifragility</span></td>
-      <td>Μέτρο ευαισθησίας σε απρόβλεπτα events (Black Swans). Βάσει D/E και Beta. Antifragile = χαμηλό χρέος, χαμηλή μεταβλητότητα — η εταιρεία επιβιώνει ή ενισχύεται σε κρίσεις. Fragile = υψηλό leverage + υψηλή volatility — επικίνδυνο σε market crashes. Informational flag, όχι filter.</td>
-      <td style="color:#1a7a4a">Antifragile = D/E&lt;1 + Beta&lt;1<br>Fragile = D/E&gt;2 + Beta&gt;1.3</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Risk Overall<br><small>(4 διαστάσεις)</small></td>
-      <td><span class="guide-source">Multi-framework</span></td>
-      <td>Σύνθετος δείκτης από: (1) Επιχειρηματικός — D/E και Beta, (2) Αποτίμησης — P/E και P/B, (3) Μακροοικονομικός — ευαισθησία κλάδου στον οικονομικό κύκλο, (4) Sector risk — ιστορική μεταβλητότητα κλάδου. Ο συνδυασμός Χαμηλού Risk + DCF MoS &gt; 20% είναι το ιδανικό setup.</td>
-      <td style="color:#1a7a4a">Χαμηλός + MoS &gt; 20%<br>= ideal combo</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Beta</td>
-      <td><span class="guide-source">CAPM / Graham</span></td>
-      <td>Μέτρο μεταβλητότητας σχετικά με την αγορά. Beta = 1.0: κινείται ακριβώς με τον S&P 500. Beta &lt; 1: πιο σταθερή (defensive stocks). Beta &gt; 1: πιο ευμετάβλητη (amplifies market moves). Χρησιμοποιείται στον υπολογισμό WACC — υψηλότερο Beta = υψηλότερο discount rate = χαμηλότερη DCF αξία.</td>
-      <td style="color:#1a7a4a">&lt; 1.0 Graham-friendly<br>χρησιμοποιείται στο WACC</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">WACC</td>
-      <td><span class="guide-source">Corporate Finance</span></td>
-      <td>Weighted Average Cost of Capital = Risk-Free Rate (4.2%) + Beta × Equity Risk Premium (5.5%). Είναι το "discount rate" του DCF — ο ελάχιστος ρυθμός απόδοσης που πρέπει να παράγει η εταιρεία για να δικαιολογεί την τιμή της. Υψηλό WACC = χαμηλότερη DCF αξία.</td>
-      <td>Τυπικά 7-12%<br>Χαμηλό Beta = χαμηλό WACC<br>= υψηλότερη αξία</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Analyst Target<br>& Upside</td>
-      <td><span class="guide-source">Consensus</span></td>
-      <td>Μέσος στόχος τιμής από sell-side analysts. Χρήσιμο ως third opinion μετά από DCF και Graham. Προσοχή: οι analysts έχουν συστηματική ανοδική προκατάληψη (bias). Χρήσιμο όταν συγκλίνει με το DCF base case — αν και οι δύο δείχνουν upside &gt; 20%, ισχυρότερο signal.</td>
-      <td style="color:#1a7a4a">&gt; 15% upside = ενισχύει thesis<br>Χρήση ως confirmation μόνο</td>
-    </tr>
-
-    <tr class="guide-row">
-      <td class="guide-name">Dividend Yield</td>
-      <td><span class="guide-source">Graham / Income</span></td>
-      <td>Ετήσιο μέρισμα διαιρεμένο με τρέχουσα τιμή. Παρέχει "floor" στην αξία μιας μετοχής — ακόμα κι αν δεν υπάρχει capital gain, λαμβάνεις εισόδημα. Ο Graham απαιτούσε ιστορικό σταθερών μερισμάτων. Προσοχή: πολύ υψηλό yield (&gt; 8%) μπορεί να σημαίνει ότι η αγορά περιμένει μείωσή του.</td>
-      <td style="color:#1a7a4a">2-4% υγιές<br>&gt; 4% υψηλό<br>&gt; 8% suspicious</td>
-    </tr>
-
-  </table>
+  {% if total > all_stocks|length %}
+  <div style="font-size:10px;color:#888;margin-top:10px">
+    Το email έχει όριο μεγέθους (Gmail κόβει μηνύματα >~100KB) — δείχνει μόνο τις top {{ all_stocks|length }}.
+    Το πλήρες σύνολο ({{ total }} μετοχές) είναι στο history.csv του repo.
+  </div>
+  {% endif %}
 </div>
 
 <div class="footer">
   Παράγεται αυτόματα κάθε Κυριακή μέσω GitHub Actions &nbsp;·&nbsp;
   Φίλτρα: P/E &lt; 20 · P/B &lt; 2.5 · DCF Base MoS &gt; 15% &nbsp;·&nbsp;
   Bear case: fat tail assumptions (Taleb) &nbsp;·&nbsp;
+  <a href="https://github.com/Hliaskon/My_Investor_expert/blob/main/GUIDE.md" style="color:#3a5bd9">Οδηγός Δεικτών (τι σημαίνει κάθε νούμερο)</a> &nbsp;·&nbsp;
   Δεν αποτελεί επενδυτική συμβουλή
 </div>
 
@@ -495,13 +391,42 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
     t = env.from_string(TEMPLATE)
     performance = ([] if performance_df is None or performance_df.empty
                     else performance_df.to_dict("records"))
+
+    # FIX S: το πλήρες σύνολο (π.χ. 217+ μετοχές) κάνει το HTML >380KB —
+    # το Gmail κόβει μηνύματα >~100KB ("[Message clipped]"), χάνοντας τον
+    # Οδηγό Δεικτών που ήταν στο τέλος (γι' αυτό μετακόμισε στο GUIDE.md).
+    # Εδώ περιορίζουμε τον "Πλήρης Λίστα" πίνακα σε top 60 by DCF MoS ώστε
+    # να μείνει το email κάτω από το όριο.
+    MAX_FULL_LIST_ROWS = 40
+    df_all_sorted = df_all.copy()
+    if "dcf_base_mos" in df_all_sorted.columns:
+        df_all_sorted = df_all_sorted.sort_values("dcf_base_mos", ascending=False, na_position="last")
+    all_stocks_trimmed = _records_no_nan(df_all_sorted.head(MAX_FULL_LIST_ROWS))
+
+    # FIX S: πλήρης ανάλυση (DCF/Risk κάρτες) μόνο για STRONG BUY/BUY —
+    # αυτά είναι τα actionable. HOLD/AVOID φαίνονται μόνο στον συμπαγή
+    # "Πλήρης Λίστα" πίνακα. Λύνει και το μέγεθος email (κάθε κάρτα είναι
+    # βαριά σε HTML) ΚΑΙ κάνει το email πιο εστιασμένο σε ό,τι έχει σήμα.
+    if "tier" in df_short.columns:
+        df_short_detailed = df_short[df_short["tier"].isin(["STRONG BUY", "BUY"])]
+    else:
+        df_short_detailed = df_short
+    # Hard cap ανεξαρτήτως πόσα STRONG BUY/BUY βγουν μια εβδομάδα — κάθε
+    # κάρτα είναι βαριά σε HTML, δεν μπορούμε να υποθέσουμε ότι θα είναι
+    # πάντα λίγα.
+    MAX_DETAILED_CARDS = 10
+    if "tier_score" in df_short_detailed.columns:
+        df_short_detailed = df_short_detailed.sort_values("tier_score", ascending=False)
+    df_short_detailed = df_short_detailed.head(MAX_DETAILED_CARDS)
+
     return t.render(
         date          = datetime.date.today().isoformat(),
         total         = len(df_all),
         batch_idx     = batch_idx,
         n_batches     = n_batches,
-        shortlist     = _records_no_nan(df_short),
-        all_stocks    = _records_no_nan(df_all),
+        shortlist     = _records_no_nan(df_short_detailed),
+        shortlist_total = len(df_short),
+        all_stocks    = all_stocks_trimmed,
         summary       = summary,
         macro_html    = macro_html,
         alignment_map = alignment_map,
