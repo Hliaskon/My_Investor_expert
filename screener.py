@@ -170,6 +170,110 @@ def _yfinance_info_with_retry(ticker: str, max_retries: int = 3, base_wait: int 
             raise
 
 
+def get_real_roic(ticker: str, _yf_ticker_obj=None) -> tuple:
+    """
+    ΔΑΝΕΙΣΜΕΝΟ από VaGlar/stock-screener (βλ. αξιολόγηση) — πραγματικός
+    υπολογισμός ROIC = NOPAT/Invested Capital από quarterly financials,
+    αντί για το δικό μας proxy (ROE × 1/(1+D/E)) που δεν είναι ακριβής
+    NOPAT/Invested Capital υπολογισμός.
+
+    NOPAT = EBIT × (1 - 0.21)  [21% εκτιμώμενος εταιρικός φόρος ΗΠΑ]
+    Invested Capital = Total Assets - Current Liabilities
+
+    Προσοχή: 2 επιπλέον yfinance calls per ticker (quarterly_financials,
+    quarterly_balance_sheet) — αυξάνει τον χρόνο εκτέλεσης και το ρίσκο
+    rate-limit σε πλήρες universe. Αποτυχία εδώ ΔΕΝ ρίχνει το ticker —
+    γυρνάει (None, None) και ο caller κάνει fallback στο proxy.
+
+    Επιστρέφει: (roic_current: float|None, roic_trend_improving: bool|None)
+    """
+    try:
+        import yfinance as yf
+        t = _yf_ticker_obj or yf.Ticker(ticker, session=_YF_SESSION)
+        q_income  = t.quarterly_financials
+        q_balance = t.quarterly_balance_sheet
+        roic_values = []
+        if q_income is not None and q_balance is not None:
+            for i in range(min(4, q_income.shape[1])):
+                try:
+                    ebit = q_income.iloc[:, i].get("EBIT") or q_income.iloc[:, i].get("Operating Income")
+                    nopat = ebit * 0.79 if ebit else None
+                    total_assets  = q_balance.iloc[:, i].get("Total Assets")
+                    current_liab  = q_balance.iloc[:, i].get("Current Liabilities")
+                    invested_capital = (total_assets - current_liab) if (total_assets and current_liab) else None
+                    if nopat and invested_capital and invested_capital > 0:
+                        roic_values.append(nopat / invested_capital)
+                except Exception:
+                    continue
+        roic_current  = roic_values[0] if roic_values else None
+        roic_trend_up = (roic_values[0] > roic_values[-1]) if len(roic_values) >= 2 else None
+        return roic_current, roic_trend_up
+    except Exception as e:
+        print(f"[ROIC-REAL] {ticker}: αποτυχία ({e}) — fallback σε proxy")
+        return None, None
+
+
+def get_insider_net_pct(ticker: str, _yf_ticker_obj=None):
+    """
+    ΔΑΝΕΙΣΜΕΝΟ από VaGlar/stock-screener. Καθαρό % μετοχών που αγοράστηκαν
+    (θετικό) ή πουλήθηκαν (αρνητικό) από insiders τους τελευταίους 6 μήνες.
+    yfinance's insider_purchases — 1 επιπλέον call per ticker.
+    """
+    try:
+        import yfinance as yf
+        t = _yf_ticker_obj or yf.Ticker(ticker, session=_YF_SESSION)
+        insider_df = t.insider_purchases
+        if insider_df is None or insider_df.empty:
+            return None
+        label_col = insider_df.columns[0]
+        for _, row in insider_df.iterrows():
+            label = str(row[label_col])
+            if "% Net Shares Purchased" in label:
+                val = row.get("Shares") if "Shares" in insider_df.columns else row.iloc[-1]
+                if isinstance(val, str):
+                    val = val.strip().rstrip("%")
+                val = safe_float(val)
+                if val is not None and abs(val) > 1:
+                    val /= 100  # ήταν ήδη σε percentage units (π.χ. "12.3")
+                return val
+    except Exception as e:
+        print(f"[INSIDER] {ticker}: αποτυχία ({e})")
+    return None
+
+
+def get_technicals(ticker: str, _yf_ticker_obj=None) -> dict:
+    """
+    ΔΑΝΕΙΣΜΕΝΟ (προσαρμοσμένο) από VaGlar/stock-screener. RSI(14) +
+    200-day moving average + θέση σχετικά με αυτά. 1 επιπλέον call
+    (history 1y) per ticker.
+
+    RSI: Relative Strength Index — momentum oscillator 0-100. <30 = oversold
+    (πιθανή αντιστροφή προς τα πάνω), >70 = overbought.
+    """
+    out = {"rsi": None, "dma200": None, "pct_vs_dma200": None}
+    try:
+        import yfinance as yf
+        t = _yf_ticker_obj or yf.Ticker(ticker, session=_YF_SESSION)
+        hist = t.history(period="1y")
+        if hist.empty:
+            return out
+        closes = hist["Close"]
+        out["dma200"] = float(closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else float(closes.mean())
+        delta = closes.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss
+        rsi_series = 100 - (100 / (1 + rs))
+        if not rsi_series.dropna().empty:
+            out["rsi"] = float(rsi_series.dropna().iloc[-1])
+        last_price = float(closes.iloc[-1])
+        if out["dma200"]:
+            out["pct_vs_dma200"] = (last_price - out["dma200"]) / out["dma200"]
+    except Exception as e:
+        print(f"[TECHNICALS] {ticker}: αποτυχία ({e})")
+    return out
+
+
 def get_fundamentals_yfinance(ticker: str) -> dict | None:
     """
     FIX G (η ουσιαστική αλλαγή): αντικαθιστά εντελώς το Alpha Vantage
@@ -191,6 +295,8 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
     η υπόλοιπη screen_ticker() να μη χρειάζεται αλλαγή.
     """
     try:
+        import yfinance as yf
+        yf_ticker = yf.Ticker(ticker, session=_YF_SESSION)
         info = _yfinance_info_with_retry(ticker)
         if not info or not (info.get("symbol") or info.get("longName")):
             return None
@@ -212,6 +318,17 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
         price = (info.get("currentPrice") or info.get("regularMarketPrice")
                   or info.get("previousClose"))
 
+        # FIX T (δανεισμένο από VaGlar/stock-screener): προαιρετικά extended
+        # metrics — πραγματικό ROIC, insider trading, RSI/technicals. Κάθε
+        # ένα προσθέτει 1 yfinance call/ticker (σύνολο έως +3), αυξάνοντας
+        # χρόνο εκτέλεσης και ρίσκο rate-limit σε πλήρες universe. Toggle
+        # με EXTENDED_METRICS=0 αν χρειαστεί να τα απενεργοποιήσεις γρήγορα.
+        roic_real, roic_trend_up, insider_pct, tech = None, None, None, {}
+        if os.environ.get("EXTENDED_METRICS", "1") == "1":
+            roic_real, roic_trend_up = get_real_roic(ticker, yf_ticker)
+            insider_pct              = get_insider_net_pct(ticker, yf_ticker)
+            tech                     = get_technicals(ticker, yf_ticker)
+
         return {
             "Symbol":                     info.get("symbol", ticker),
             "TrailingPE":                 info.get("trailingPE"),
@@ -224,6 +341,11 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
             "AnalystTargetPrice":         info.get("targetMeanPrice"),
             "52WeekHigh":                 info.get("fiftyTwoWeekHigh"),
             "52WeekLow":                  info.get("fiftyTwoWeekLow"),
+            "_roic_real":                 roic_real,
+            "_roic_trend_up":             roic_trend_up,
+            "_insider_net_pct":           insider_pct,
+            "_rsi":                       tech.get("rsi"),
+            "_pct_vs_dma200":             tech.get("pct_vs_dma200"),
             "QuarterlyEarningsGrowthYOY": info.get("earningsQuarterlyGrowth"),
             "EVToEBITDA":                 info.get("enterpriseToEbitda"),
             "50DayMovingAverage":         info.get("fiftyDayAverage"),
@@ -440,11 +562,23 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             roe_pct = round(roe * 100, 1)
             roe_quality = "strong" if roe_pct >= 15 else ("moderate" if roe_pct >= 10 else "weak")
 
+        # FIX T: προτίμηση στο πραγματικό ROIC (NOPAT/Invested Capital,
+        # δανεισμένο από VaGlar) όταν διαθέσιμο· fallback στο δικό μας
+        # proxy (ROE × 1/(1+D/E)) όταν το yfinance δεν έχει αρκετά quarterly
+        # data (συχνό για μικρότερες/διεθνείς εταιρείες).
+        roic_real_raw = ov.get("_roic_real")
         roic_proxy = roic_vs_wacc = None
-        if roe is not None:
+        if roic_real_raw is not None:
+            roic_proxy   = round(roic_real_raw * 100, 1)
+            roic_vs_wacc = "positive" if roic_proxy > round(w * 100, 1) else "negative"
+            roic_source  = "real"
+        elif roe is not None:
             roe_pct    = round(roe * 100, 1)
             roic_proxy = round(roe_pct * (1 / (1 + de)), 1) if (de and de > 0) else roe_pct
             roic_vs_wacc = "positive" if roic_proxy > round(w * 100, 1) else "negative"
+            roic_source  = "proxy"
+        else:
+            roic_source = None
 
         pct_from_low, w52_flag = calc_52w_proximity(price, low52, high52)
         fragility              = calc_fragility(de, None, beta)
@@ -488,7 +622,12 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             "risk":           risk_score(pe, pb, beta, de, sector, market=watchlist_market),
             "ev_ebitda":      round(ev_ebitda, 1) if ev_ebitda else None,
             "roic":           roic_proxy,
+            "roic_source":    roic_source,
+            "roic_trend_up":  ov.get("_roic_trend_up"),
             "roic_vs_wacc":   roic_vs_wacc,
+            "insider_net_pct": ov.get("_insider_net_pct"),
+            "rsi":            round(ov["_rsi"], 1) if ov.get("_rsi") is not None else None,
+            "pct_vs_dma200":  round(ov["_pct_vs_dma200"] * 100, 1) if ov.get("_pct_vs_dma200") is not None else None,
             "roe_quality":    roe_quality,
             "fcf_yield":      None,
             "rd_pct":         None,
@@ -610,8 +749,23 @@ def compute_tier(row: dict, favored_sectors=None) -> dict:
     if risk.get("overall") in ("low", "medium"): m_score += 10
     b["macro_score"] = m_score
 
-    total = val_score + q_score + m_score
+    # ── FIX T: Catalyst (0-10, δανεισμένο από VaGlar) ──────────────────
+    # Insider buying είναι σήμα υψηλής πεποίθησης — τα insiders ξέρουν την
+    # επιχείρηση από μέσα. RSI oversold είναι τεχνικό σήμα πιθανής
+    # αντιστροφής, συμπληρώνει (δεν αντικαθιστά) το 52w-low behavioral
+    # signal που ήδη έχουμε.
+    c_score = 0
+    insider = row.get("insider_net_pct")
+    if _present(insider):
+        if insider >= 0.02: c_score += 5
+        elif insider > 0: c_score += 3
+    rsi = row.get("rsi")
+    if _present(rsi) and rsi <= 30: c_score += 5
+    b["catalyst_score"] = c_score
+
+    total = val_score + q_score + m_score + c_score
     b["total_score"] = total
+    b["max_score"] = 100  # 40 valuation + 30 quality + 20 macro + 10 catalyst
 
     if not eps_quality_ok:
         tier = "AVOID"
@@ -621,16 +775,16 @@ def compute_tier(row: dict, favored_sectors=None) -> dict:
         b["tier_reason"] = "Ελλιπή δεδομένα (<50% πεδίων) — ανώτατο HOLD ανεξαρτήτως score"
     elif total >= 65 and completeness >= 0.75:
         tier = "STRONG BUY"
-        b["tier_reason"] = f"Score {total}/90, {b['data_completeness_pct']}% δεδομένα — σύγκλιση σημάτων"
+        b["tier_reason"] = f"Score {total}/100, {b['data_completeness_pct']}% δεδομένα — σύγκλιση σημάτων"
     elif total >= 45 and completeness >= 0.6:
         tier = "BUY"
-        b["tier_reason"] = f"Score {total}/90, {b['data_completeness_pct']}% δεδομένα"
+        b["tier_reason"] = f"Score {total}/100, {b['data_completeness_pct']}% δεδομένα"
     elif total >= 25:
         tier = "HOLD"
-        b["tier_reason"] = f"Score {total}/90 — μερικά θετικά σήματα, όχι αρκετά"
+        b["tier_reason"] = f"Score {total}/100 — μερικά θετικά σήματα, όχι αρκετά"
     else:
         tier = "AVOID"
-        b["tier_reason"] = f"Score {total}/90 — ανεπαρκή σήματα"
+        b["tier_reason"] = f"Score {total}/100 — ανεπαρκή σήματα"
     b["tier"] = tier
     return b
 
@@ -776,8 +930,12 @@ def record_history(shortlist_df: pd.DataFrame):
     if shortlist_df.empty:
         return
     today = datetime.date.today().isoformat()
-    new_rows = shortlist_df[["ticker", "sector", "price", "dcf_base_mos",
-                              "graham_mos", "risk"]].copy()
+    # FIX T: προστέθηκαν tier/tier_score στο ledger — χρειάζονται για το
+    # ledger badge (🔁 3η φορά · Δscore...), δανεισμένο concept από VaGlar.
+    cols = ["ticker", "sector", "price", "dcf_base_mos", "graham_mos", "risk"]
+    if "tier" in shortlist_df.columns:
+        cols += ["tier", "tier_score"]
+    new_rows = shortlist_df[cols].copy()
     new_rows["date_flagged"]  = today
     new_rows["risk_overall"]  = new_rows["risk"].apply(
         lambda r: r.get("overall") if isinstance(r, dict) else None)
@@ -792,6 +950,55 @@ def record_history(shortlist_df: pd.DataFrame):
     combined.to_csv(HISTORY_FILE, index=False)
     print(f"[HISTORY] Καταγράφηκαν {len(new_rows)} νέα picks → {HISTORY_FILE} "
           f"(σύνολο: {len(combined)} εγγραφές)")
+
+
+def get_ledger_badges(shortlist_df: pd.DataFrame) -> dict:
+    """
+    ΔΑΝΕΙΣΜΕΝΟ concept από VaGlar/stock-screener. Για κάθε ticker στο
+    σημερινό shortlist, ελέγχει το history.csv για προηγούμενες εμφανίσεις
+    και επιστρέφει ένα φιλικό string badge:
+      "🆕 Νέα πρόταση" — πρώτη φορά
+      "🔁 3η φορά · Δscore +18 (95→113) · +12.4% από τελευταία πρόταση"
+    Καμία επιπλέον κλήση API — συγκρίνει μόνο με το ήδη-καταγεγραμμένο
+    history.csv.
+    Επιστρέφει: {ticker: badge_string}
+    """
+    badges = {}
+    if not os.path.exists(HISTORY_FILE):
+        return {t: "🆕 Νέα πρόταση" for t in shortlist_df["ticker"]}
+
+    hist = pd.read_csv(HISTORY_FILE)
+    if "tier_score" not in hist.columns:
+        # Παλιό history.csv από πριν το FIX T — δεν έχει tier_score ακόμα
+        hist["tier_score"] = None
+
+    for _, row in shortlist_df.iterrows():
+        ticker = row["ticker"]
+        prior = hist[hist["ticker"] == ticker].sort_values("date_flagged")
+        if prior.empty:
+            badges[ticker] = "🆕 Νέα πρόταση"
+            continue
+        n_times = len(prior) + 1
+        last = prior.iloc[-1]
+        parts = [f"🔁 {n_times}η φορά"]
+        try:
+            old_score, new_score = last.get("tier_score"), row.get("tier_score")
+            if pd.notna(old_score) and pd.notna(new_score):
+                delta = new_score - old_score
+                sign  = "+" if delta >= 0 else ""
+                parts.append(f"Δscore {sign}{delta:.0f} ({old_score:.0f}→{new_score:.0f})")
+        except Exception:
+            pass
+        try:
+            old_price, new_price = last.get("price_at_flag"), row.get("price")
+            if pd.notna(old_price) and old_price and pd.notna(new_price):
+                pct = (new_price - old_price) / old_price * 100
+                sign = "+" if pct >= 0 else ""
+                parts.append(f"{sign}{pct:.1f}% από τελευταία πρόταση")
+        except Exception:
+            pass
+        badges[ticker] = " · ".join(parts)
+    return badges
 
 
 def check_performance() -> pd.DataFrame:
@@ -945,6 +1152,7 @@ if __name__ == "__main__":
     # FIX H: ιστορικότητα — performance παλιών picks ΠΡΙΝ γράψουμε νέα,
     # μετά καταγραφή των νέων για το επόμενο run
     performance_df = check_performance()
+    ledger_badges  = get_ledger_badges(shortlist)  # ΠΡΙΝ το record_history!
     record_history(shortlist)
 
     summary = ""
@@ -958,5 +1166,6 @@ if __name__ == "__main__":
     html = build_html(df, shortlist, summary, macro_html=macro_html,
                       alignment_map=alignment_map,
                       batch_idx=batch_idx, n_batches=n_batches,
-                      performance_df=performance_df)
+                      performance_df=performance_df,
+                      ledger_badges=ledger_badges)
     send_email(html, week_number, batch_idx, n_batches)
