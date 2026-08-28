@@ -210,6 +210,7 @@ TEMPLATE = """
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="ticker-big">{{ r.ticker }}</span>
         {{ tier_badge(r.tier, r.tier_reason) }}
+        <span style="font-size:10px;color:#888">{{ r.ledger_badge }}</span>
         <span class="sector-tag">{{ r.sector }}</span>
         {{ risk_badge(r.risk.overall) }}
         {{ fragility_badge(r.fragility) }}
@@ -223,7 +224,7 @@ TEMPLATE = """
     </div>
 
     <div style="font-size:10px;color:#888;margin:-6px 0 10px 2px">
-      Confidence Score: <strong>{{ r.tier_score }}/90</strong> ·
+      Confidence Score: <strong>{{ r.tier_score }}/100</strong> ·
       Data completeness: <strong>{{ r.data_completeness }}%</strong> ·
       {{ r.tier_reason }}
     </div>
@@ -377,9 +378,10 @@ def _records_no_nan(df):
 
 
 def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
-               batch_idx=1, n_batches=5, performance_df=None):
+               batch_idx=1, n_batches=5, performance_df=None, ledger_badges=None):
     if alignment_map is None:
         alignment_map = {}
+    ledger_badges = ledger_badges or {}
     env = Environment()
     env.globals["risk_badge"]      = risk_badge
     env.globals["tier_badge"]      = tier_badge
@@ -419,12 +421,16 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
         df_short_detailed = df_short_detailed.sort_values("tier_score", ascending=False)
     df_short_detailed = df_short_detailed.head(MAX_DETAILED_CARDS)
 
+    shortlist_records = _records_no_nan(df_short_detailed)
+    for rec in shortlist_records:
+        rec["ledger_badge"] = ledger_badges.get(rec["ticker"], "🆕 Νέα πρόταση")
+
     return t.render(
         date          = datetime.date.today().isoformat(),
         total         = len(df_all),
         batch_idx     = batch_idx,
         n_batches     = n_batches,
-        shortlist     = _records_no_nan(df_short_detailed),
+        shortlist     = shortlist_records,
         shortlist_total = len(df_short),
         all_stocks    = all_stocks_trimmed,
         summary       = summary,
