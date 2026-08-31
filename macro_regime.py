@@ -41,8 +41,16 @@ def get_macro_inputs(fred_client):
                     print(f"[MACRO] Failed to fetch {series_id}: {e}")
                     return None
 
-    # GDP Growth YoY %
-    gdp = fred_safe("GDP")
+    # GDP Growth YoY % — REAL (inflation-adjusted), όχι nominal.
+    # FIX Z (κρίσιμο): το series "GDP" του FRED είναι ΟΝΟΜΑΣΤΙΚΟ ΑΕΠ
+    # (nominal, δεν αφαιρεί πληθωρισμό). Το "GDPC1" είναι το πραγματικό
+    # (real) ΑΕΠ. Το classifier threshold "gdp_growing = gdp_yoy > 2.0"
+    # (βλ. παρακάτω) είναι βαθμονομημένο για πραγματικό GDP growth
+    # (τυπικό εύρος ~1.5-3%) — nominal growth = real growth + πληθωρισμός,
+    # οπότε σε high-inflation περιβάλλον (π.χ. Core PCE 3%+) φούσκωνε
+    # τεχνητά το νούμερο (φάνηκε ως 6.6% σε batch 35) και έσπρωχνε
+    # συστηματικά την ταξινόμηση προς "Overheating"/"Expansion".
+    gdp = fred_safe("GDPC1")
     if gdp is not None and len(gdp.dropna()) >= 4:
         inputs["gdp_yoy"]      = round(gdp.pct_change(4).dropna().iloc[-1] * 100, 2)
         inputs["gdp_date"]     = str(gdp.dropna().index[-1].date())
