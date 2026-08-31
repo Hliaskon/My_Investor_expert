@@ -291,7 +291,8 @@ TEMPLATE = """
         <div class="mini-label">Dividend Yield</div>
         <div class="mini-val">{{ r.div_yield }}%</div>
         <div class="mini-sub">
-          {% if r.div_yield > 4 %}<span style="color:#1a7a4a">✓ Υψηλό</span>
+          {% if r.div_yield_flag == "suspect_data" %}<span style="color:#c0392b">⚠️ Ύποπτο data (verify στην πηγή)</span>
+          {% elif r.div_yield > 4 %}<span style="color:#1a7a4a">✓ Υψηλό</span>
           {% elif r.div_yield > 2 %}<span style="color:#8a6000">~ Μέτριο</span>
           {% elif r.div_yield > 0 %}<span style="color:#888">Χαμηλό</span>
           {% else %}<span style="color:#aaa">Καμία</span>{% endif %}
