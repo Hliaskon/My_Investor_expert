@@ -500,7 +500,12 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
         target    = safe_float(ov.get("AnalystTargetPrice"))   or None
         high52    = ov.get("52WeekHigh")
         low52     = ov.get("52WeekLow")
-        g_est     = safe_float(ov.get("QuarterlyEarningsGrowthYOY"), 0.08) or 0.08
+        # FIX Z: το παλιό `safe_float(x, 0.08) or 0.08` αντικαθιστούσε ΚΑΙ
+        # το raw 0.0 (πραγματικό μηδενικό growth, falsy στην Python) με το
+        # default 0.08 — σιωπηρή, λάθος υπόθεση 8% ανάπτυξης. Ρητός
+        # έλεγχος για None/NaN μόνο, το 0.0 παραμένει 0.0.
+        _g_raw = ov.get("QuarterlyEarningsGrowthYOY")
+        g_est  = float(_g_raw) if (_g_raw is not None and not pd.isna(_g_raw)) else 0.08
         ev_ebitda = safe_float(ov.get("EVToEBITDA"))           or None
         ma50      = safe_float(ov.get("50DayMovingAverage"))
 
@@ -541,7 +546,18 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
 
         w          = wacc(beta)
         sector_cap = SECTOR_G_CAP.get(sector, 0.12)
-        g_base     = max(0.02, min(abs(g_est), sector_cap))
+        # FIX Z (κρίσιμο): το abs(g_est) μετέτρεπε αρνητικό πραγματικό
+        # earnings growth (εταιρεία σε συρρίκνωση) σε θετική DCF growth
+        # υπόθεση — π.χ. -15% YoY γινόταν "+15% ανάπτυξη" στο DCF.
+        # Αυτό εξηγούσε το systematic upward bias όπου το DCF base-case
+        # έδειχνε πολλαπλάσιο upside σε σχέση με το analyst target
+        # (π.χ. VZ +129% DCF έναντι +2.9% analyst, APA +171% έναντι +2.8%).
+        # Σωστή λογική: αρνητικό g_est → floor στο ελάχιστο (2%), ΟΧΙ flip
+        # σε θετικό. Θετικό g_est → κανονικό cap ανά sector όπως πριν.
+        if g_est > 0:
+            g_base = max(0.02, min(g_est, sector_cap))
+        else:
+            g_base = 0.02
         g_bear_fat = max(0.005, max(0.01, g_base - 0.06) - 0.03)
         g_bull     = min(0.25, g_base + 0.08)
 
@@ -601,7 +617,15 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             "wacc":           round(w * 100, 1),
             "de":             round(de, 1)         if de    else None,
             "roe":            round(roe * 100, 1)  if roe   else None,
+            # FIX Z: yfinance's dividendYield field έχει αλλάξει scale
+            # μεταξύ εκδόσεων χωρίς προειδοποίηση (βλ. σχόλιο ~L310) και η
+            # /100-heuristic δεν μπορεί να ξεχωρίσει "πραγματικά υψηλό
+            # yield" από "λάθος upstream τιμή". Sanity cap: yield >15%
+            # είναι σχεδόν πάντα data artifact (π.χ. RRC 96%, GL 76% που
+            # εμφανίστηκαν στο batch 35) — flag το αντί να το εμφανίζεις
+            # ως αξιόπιστο ✓ Υψηλό.
             "div_yield":      round(div * 100, 2),
+            "div_yield_flag": "suspect_data" if (div * 100) > 15 else None,
             "g_base_pct":     round(g_base * 100, 1),
             "g_cap_pct":      round(sector_cap * 100, 1),
             "graham_value":   gv,
