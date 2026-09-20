@@ -305,3 +305,42 @@ FITB,Financials,54.72,,,2026-09-13,medium,AVOID,20.0
 MET,Financials,97.14,,,2026-09-13,medium,AVOID,20.0
 PRU,Financials,119.24,,,2026-09-13,medium,AVOID,20.0
 EXC,Utilities,43.16,15.1,-21.2,2026-09-13,low,AVOID,10.0
+CI,Healthcare,275.28,138.1,122.1,2026-09-20,medium,STRONG BUY,73.0
+APA,Energy,44.87,149.6,,2026-09-20,high,STRONG BUY,68.0
+HIG,Financials,131.89,,,2026-09-20,medium,STRONG BUY,65.0
+RRC,Energy,38.44,62.1,,2026-09-20,high,STRONG BUY,65.0
+TRV,Financials,374.62,,,2026-09-20,medium,BUY,63.0
+T,Communication Services,25.4,113.1,68.2,2026-09-20,medium,BUY,60.0
+ALL,Financials,249.83,,,2026-09-20,medium,BUY,60.0
+TROW,Financials,104.16,,,2026-09-20,medium,BUY,60.0
+EOG,Energy,144.23,133.6,,2026-09-20,high,BUY,55.0
+CMCSA,Communication Services,22.74,80.3,71.5,2026-09-20,low,BUY,55.0
+GL,Financials,173.42,,,2026-09-20,medium,BUY,55.0
+DVN,Energy,48.61,105.1,,2026-09-20,high,BUY,50.0
+VZ,Communication Services,48.09,67.1,-0.2,2026-09-20,medium,BUY,50.0
+AFL,Financials,116.33,,,2026-09-20,medium,BUY,50.0
+OXY,Energy,58.84,51.1,,2026-09-20,high,BUY,45.0
+BAC,Financials,57.73,,,2026-09-20,medium,HOLD,40.0
+RF,Financials,28.5,,,2026-09-20,medium,HOLD,40.0
+KEY,Financials,20.81,,,2026-09-20,medium,HOLD,40.0
+COP,Energy,131.83,50.2,,2026-09-20,high,HOLD,40.0
+CPB,Consumer Defensive,20.69,58.8,29.8,2026-09-20,low,HOLD,40.0
+AIG,Financials,75.33,,,2026-09-20,medium,HOLD,40.0
+CB,Financials,340.64,,,2026-09-20,medium,HOLD,38.0
+WFC,Financials,86.12,,,2026-09-20,medium,HOLD,35.0
+USB,Financials,60.06,,,2026-09-20,medium,HOLD,35.0
+PNC,Financials,233.17,,,2026-09-20,medium,HOLD,35.0
+BRK-B,Financials,509.77,,,2026-09-20,medium,HOLD,35.0
+TFC,Financials,48.56,,,2026-09-20,medium,HOLD,30.0
+STT,Financials,182.87,,,2026-09-20,medium,HOLD,30.0
+MTB,Financials,227.31,,,2026-09-20,medium,HOLD,30.0
+DUK,Utilities,117.53,22.6,4.5,2026-09-20,low,HOLD,30.0
+AZO,Consumer Cyclical,2855.31,16.6,,2026-09-20,medium,HOLD,30.0
+C,Financials,131.77,,,2026-09-20,medium,HOLD,25.0
+COF,Financials,202.43,,,2026-09-20,medium,HOLD,25.0
+CFG,Financials,67.04,,,2026-09-20,medium,HOLD,25.0
+HBAN,Financials,15.88,,,2026-09-20,medium,HOLD,25.0
+FITB,Financials,52.91,,,2026-09-20,medium,HOLD,25.0
+MET,Financials,97.04,,,2026-09-20,medium,AVOID,20.0
+PRU,Financials,118.4,,,2026-09-20,medium,AVOID,20.0
+EXC,Utilities,42.07,18.1,-19.2,2026-09-20,low,AVOID,15.0
