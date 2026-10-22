@@ -118,7 +118,10 @@ try:
 except Exception as _e:
     print(f"[WARNING] curl_cffi δεν φορτώθηκε ({_e}) — fallback σε default yfinance session")
     _YF_SESSION = None
-TERMINAL_GROWTH = 0.025
+TERMINAL_GROWTH_DEFAULT = 0.025
+# FIX DCF2: όταν δεν υπάρχει καμία πηγή growth (ούτε analyst LTG ούτε
+# revenue CAGR). Παλιά default ήταν 8% — σιωπηλά αισιόδοξο.
+DEFAULT_GROWTH = 0.03
 # FIX G: το AV batch-limit (25/ημέρα) δεν υπάρχει πια — yfinance δεν έχει
 # επίσημο daily cap. SCREEN_ALL=1 (default) τρέχει ΟΛΟ το watchlist κάθε
 # φορά. Βάλε SCREEN_ALL=0 + BATCH_SIZE για να επιστρέψεις σε batching
@@ -362,6 +365,59 @@ def get_technicals(ticker: str, _yf_ticker_obj=None) -> dict:
     return out
 
 
+def get_dcf_inputs(ticker: str, _yf_ticker_obj=None) -> dict:
+    """
+    FIX DCF2: πραγματικά inputs για το DCF αντί για EPS×0.7 και
+    single-quarter growth.
+      - fcf_hist:    ετήσιο Free Cash Flow (έως 4 έτη, νεότερο πρώτο)
+      - rev_cagr:    CAGR εσόδων από τα ετήσια financials (≥3 έτη)
+      - analyst_ltg: analyst long-term growth (yfinance growth_estimates,
+                     γραμμή LTG/+5y) — αν υπάρχει
+    Όλα στο financialCurrency. +2-3 yfinance calls/ticker. Αποτυχία → κενά
+    πεδία, ο caller πέφτει σε fallback.
+    """
+    out = {"fcf_hist": [], "rev_cagr": None, "analyst_ltg": None}
+    try:
+        import yfinance as yf
+        t = _yf_ticker_obj or yf.Ticker(ticker, session=_YF_SESSION)
+
+        def _series(df, names):
+            if df is None or df.empty:
+                return []
+            for n in names:
+                if n in df.index:
+                    return [float(v) for v in df.loc[n].tolist() if pd.notna(v)]
+            return []
+
+        cf = t.cashflow
+        fcf = _series(cf, ["Free Cash Flow"])
+        if not fcf:
+            ocf   = _series(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
+            capex = _series(cf, ["Capital Expenditure", "Capital Expenditures"])
+            if ocf and len(ocf) == len(capex):
+                fcf = [o + c for o, c in zip(ocf, capex)]   # capex αρνητικό στη Yahoo
+        out["fcf_hist"] = fcf[:4]
+
+        rev = _series(t.financials, ["Total Revenue"])[:4]
+        if len(rev) >= 3 and rev[0] > 0 and rev[-1] > 0:
+            out["rev_cagr"] = (rev[0] / rev[-1]) ** (1 / (len(rev) - 1)) - 1
+    except Exception as e:
+        print(f"[DCF-INPUTS] {ticker}: αποτυχία cashflow/financials ({e})")
+    try:
+        ge = t.growth_estimates
+        if ge is not None and not ge.empty:
+            for row in ("LTG", "+5y"):
+                if row in ge.index:
+                    col = "stockTrend" if "stockTrend" in ge.columns else ge.columns[0]
+                    v = ge.loc[row, col]
+                    if pd.notna(v) and -0.5 < float(v) < 1.0:
+                        out["analyst_ltg"] = float(v)
+                    break
+    except Exception:
+        pass   # growth_estimates λείπει σε παλιές εκδόσεις yfinance / μη-US tickers
+    return out
+
+
 def get_fundamentals_yfinance(ticker: str) -> dict | None:
     """
     FIX G (η ουσιαστική αλλαγή): αντικαθιστά εντελώς το Alpha Vantage
@@ -416,6 +472,7 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
             roic_real, roic_trend_up = get_real_roic(ticker, yf_ticker)
             insider_pct              = get_insider_net_pct(ticker, yf_ticker)
             tech                     = get_technicals(ticker, yf_ticker)
+        dcf_in = get_dcf_inputs(ticker, yf_ticker)
 
         return {
             "Symbol":                     info.get("symbol", ticker),
@@ -440,6 +497,10 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
             "Sector":                     info.get("sector", "Unknown"),
             "_price":                     price,
             "_currency":                  info.get("currency"),
+            "_shares":                    info.get("sharesOutstanding"),
+            "_fcf_hist":                  dcf_in["fcf_hist"],
+            "_rev_cagr":                  dcf_in["rev_cagr"],
+            "_analyst_ltg":               dcf_in["analyst_ltg"],
             "_financial_currency":        info.get("financialCurrency"),
         }
     except Exception as e:
@@ -479,14 +540,15 @@ def safe_float(val, default=0):
 def wacc(beta):
     return max(MIN_WACC, RISK_FREE_RATE + beta * ERP)
 
-def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5):
+def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5, terminal_g=None):
     if not fcf_per_share or fcf_per_share <= 0:
         return None
+    tg = TERMINAL_GROWTH_DEFAULT if terminal_g is None else terminal_g
     total = 0
     for t in range(1, years + 1):
         total += fcf_per_share * (1 + g_rate)**t / (1 + wacc_rate)**t
     fcf5     = fcf_per_share * (1 + g_rate)**years
-    terminal = fcf5 * (1 + TERMINAL_GROWTH) / (wacc_rate - TERMINAL_GROWTH)
+    terminal = fcf5 * (1 + tg) / (wacc_rate - tg)
     total   += terminal / (1 + wacc_rate)**years
     return round(total, 2)
 
@@ -591,12 +653,6 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
         target    = safe_float(ov.get("AnalystTargetPrice"))   or None
         high52    = ov.get("52WeekHigh")
         low52     = ov.get("52WeekLow")
-        # FIX Z: το παλιό `safe_float(x, 0.08) or 0.08` αντικαθιστούσε ΚΑΙ
-        # το raw 0.0 (πραγματικό μηδενικό growth, falsy στην Python) με το
-        # default 0.08 — σιωπηρή, λάθος υπόθεση 8% ανάπτυξης. Ρητός
-        # έλεγχος για None/NaN μόνο, το 0.0 παραμένει 0.0.
-        _g_raw = ov.get("QuarterlyEarningsGrowthYOY")
-        g_est  = float(_g_raw) if (_g_raw is not None and not pd.isna(_g_raw)) else 0.08
         ev_ebitda = safe_float(ov.get("EVToEBITDA"))           or None
         ma50      = safe_float(ov.get("50DayMovingAverage"))
 
@@ -652,30 +708,55 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
 
         w          = wacc(beta)
         sector_cap = SECTOR_G_CAP.get(sector, 0.12)
-        # FIX Z (κρίσιμο): το abs(g_est) μετέτρεπε αρνητικό πραγματικό
-        # earnings growth (εταιρεία σε συρρίκνωση) σε θετική DCF growth
-        # υπόθεση — π.χ. -15% YoY γινόταν "+15% ανάπτυξη" στο DCF.
-        # Αυτό εξηγούσε το systematic upward bias όπου το DCF base-case
-        # έδειχνε πολλαπλάσιο upside σε σχέση με το analyst target
-        # (π.χ. VZ +129% DCF έναντι +2.9% analyst, APA +171% έναντι +2.8%).
-        # Σωστή λογική: αρνητικό g_est → floor στο ελάχιστο (2%), ΟΧΙ flip
-        # σε θετικό. Θετικό g_est → κανονικό cap ανά sector όπως πριν.
-        if g_est > 0:
-            g_base = max(0.02, min(g_est, sector_cap))
+
+        # ── FIX DCF2: growth ──────────────────────────────────────────
+        # Παλιά: earningsQuarterlyGrowth (ΕΝΑ τρίμηνο YoY) ως 5ετής υπόθεση
+        # — θόρυβος γινόταν αποτίμηση. Τώρα: το ΧΑΜΗΛΟΤΕΡΟ από analyst LTG
+        # και πολυετές revenue CAGR (συντηρητικό — το analyst LTG έχει
+        # τεκμηριωμένη ανοδική μεροληψία). Χωρίς καμία πηγή → 3%.
+        g_sources = {k: v for k, v in (("analyst_ltg", ov.get("_analyst_ltg")),
+                                       ("rev_cagr",    ov.get("_rev_cagr")))
+                     if v is not None and not pd.isna(v)}
+        if g_sources:
+            growth_source = min(g_sources, key=g_sources.get)
+            g_raw = g_sources[growth_source]
         else:
-            g_base = 0.02
+            growth_source, g_raw = "default", DEFAULT_GROWTH
+        g_base     = max(0.0, min(g_raw, sector_cap))
+        # Terminal growth όχι πάνω από το base growth (συρρικνούμενη εταιρεία
+        # δεν "επιταχύνει" στο διηνεκές).
+        g_term     = min(TERMINAL_GROWTH_DEFAULT, max(g_base, 0.01))
         g_bear_fat = max(0.005, max(0.01, g_base - 0.06) - 0.03)
         g_bull     = min(0.25, g_base + 0.08)
 
-        fcf_ps = eps * 0.7 if eps else None
+        # ── FIX DCF2: FCF ─────────────────────────────────────────────
+        # Μέσο ετήσιο reported FCF (έως 4 έτη) / μετοχές — εξομαλύνει
+        # κυκλικά peaks (4 έτη ≠ πλήρης κύκλος, μερική μόνο προστασία).
+        # Fallback στο παλιό EPS×0.7 proxy ΜΟΝΟ αν δεν υπάρχει cashflow·
+        # τότε το DCF δεν μετράει στο tier score (βλ. compute_tier).
+        fcf_hist = ov.get("_fcf_hist") or []
+        shares   = safe_float(ov.get("_shares")) or None
+        if fcf_hist and shares and fx_factor:
+            fcf_ps = (sum(fcf_hist) / len(fcf_hist)) / shares * fx_factor
+            fcf_source = "reported"
+            # Σε ασυμφωνία νομίσματος/ADR ratio, έλεγχος μονάδων: FCF/share
+            # >3× EPS σχεδόν σίγουρα σημαίνει λάθος share count.
+            if fx_factor != 1.0 and eps and eps > 0 and fcf_ps > 3 * eps:
+                data_warnings.append(f"FCF/share {fcf_ps:.2f} > 3× EPS {eps:.2f} "
+                                     f"μετά τη μετατροπή νομίσματος — πιθανό λάθος μονάδων")
+        elif eps:
+            fcf_ps, fcf_source = eps * 0.7, "eps_proxy"
+        else:
+            fcf_ps, fcf_source = None, None
+        fcf_yield = round(fcf_ps / price * 100, 1) if (fcf_ps and fcf_source == "reported") else None
 
-        # FIX D: DCF εξαιρείται για sectors όπου το FCF proxy δεν βγάζει νόημα
+        # FIX D: DCF εξαιρείται για sectors όπου το FCF δεν βγάζει νόημα
         # (τράπεζες/ασφαλιστικές — βλ. σχόλιο στο DCF_UNRELIABLE_SECTORS).
         if sector in DCF_UNRELIABLE_SECTORS:
             dcf_base = dcf_bear = dcf_bull = None
         else:
-            dcf_base = dcf_value(fcf_ps, g_base, w)
-            dcf_bear = dcf_value(fcf_ps, g_bear_fat, w + 0.02)
+            dcf_base = dcf_value(fcf_ps, g_base, w, terminal_g=g_term)
+            dcf_bear = dcf_value(fcf_ps, g_bear_fat, w + 0.02, terminal_g=min(g_term, 0.015))
             dcf_bull = dcf_value(fcf_ps, g_bull, w - 0.010)
         gv       = graham_value(eps, g_base * 100, sector)
 
@@ -734,6 +815,8 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             "div_yield_flag": "suspect_data" if (div * 100) > 15 else None,
             "g_base_pct":     round(g_base * 100, 1),
             "g_cap_pct":      round(sector_cap * 100, 1),
+            "growth_source":  growth_source,
+            "fcf_source":     fcf_source,
             "graham_value":   gv,
             "graham_mos":     mos(gv),
             "dcf_bear":       dcf_bear,
@@ -759,7 +842,7 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             "rsi":            round(ov["_rsi"], 1) if ov.get("_rsi") is not None else None,
             "pct_vs_dma200":  round(ov["_pct_vs_dma200"] * 100, 1) if ov.get("_pct_vs_dma200") is not None else None,
             "roe_quality":    roe_quality,
-            "fcf_yield":      None,
+            "fcf_yield":      fcf_yield,
             "rd_pct":         None,
             "rd_flag":        None,
             "fragility":      fragility,
@@ -858,7 +941,9 @@ def compute_tier(row: dict, favored_sectors=None) -> dict:
 
     val_score = 0
     dcf_mos = row.get("dcf_base_mos")
-    if _present(dcf_mos) and dcf_mos > 20: val_score += 15
+    # FIX DCF2: DCF πάνω σε EPS×0.7 proxy δεν μετράει — μόνο reported FCF
+    if _present(dcf_mos) and dcf_mos > 20 and row.get("fcf_source") == "reported":
+        val_score += 15
     graham_mos = row.get("graham_mos")
     if _present(graham_mos) and graham_mos > 20: val_score += 10
     ev_ebitda = row.get("ev_ebitda")

@@ -232,7 +232,7 @@ TEMPLATE = """
     <!-- DCF + Risk -->
     <div class="two-col">
       <div>
-        <div class="col-title">DCF Analysis — WACC {{ r.wacc }}% · g {{ r.g_base_pct }}% · Fat Tail Bear</div>
+        <div class="col-title">DCF Analysis — WACC {{ r.wacc }}% · g {{ r.g_base_pct }}% ({{ r.growth_source }}) · FCF: {{ 'reported' if r.fcf_source == 'reported' else 'EPS×0.7 proxy — δεν μετράει στο score' }}</div>
         <table>
           <tr><th>Σενάριο</th><th>Εσωτερική Αξία</th><th>MoS vs τιμή</th></tr>
           <tr><td>🐻 Bear (fat tail)</td><td>${{ r.dcf_bear or '—' }}</td><td>{{ mos_badge(r.dcf_bear_mos) }}</td></tr>
