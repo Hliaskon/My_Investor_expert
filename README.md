@@ -129,6 +129,21 @@ Actions → Build Watchlist → Run workflow → επίλεξε αγορά:
 - **Καμία ποιοτική κρίση** (moat, management, ανταγωνιστική θέση) — μόνο
   αριθμοί. Ούτε ο Graham ούτε ο Buffett αγόραζαν τυφλά από screener output.
 
+## Tests
+
+```
+pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+
+Τρέχουν **χωρίς δίκτυο**: το yfinance αντικαθίσταται από fake module
+(`tests/conftest.py`), το SMTP επίσης. Καλύπτουν ticker normalization,
+μετατροπή νομίσματος, flag τιμής vs 50DMA, TTM ROIC, WACC floor, DCF σε
+reported FCF/growth sources, excess return/IC (με συνθετικές τιμές όπου το
+σωστό αποτέλεσμα είναι γνωστό) και ένα πλήρες end-to-end run του
+`screener.py`. **Δεν** ελέγχουν ότι η Yahoo επιστρέφει τα πεδία με τα
+ονόματα που υποθέτουμε — αυτό φαίνεται μόνο σε live run.
+
 ## Αρχεία
 
 | Αρχείο | Σκοπός |
@@ -142,5 +157,6 @@ Actions → Build Watchlist → Run workflow → επίλεξε αγορά:
 | `history.csv` | Ιστορικό shortlist προτάσεων (ledger badges) |
 | `snapshots/` | Εβδομαδιαίο στιγμιότυπο όλου του universe (backtest dataset) |
 | `performance.py` | Excess return vs benchmark ανά tier + IC |
+| `tests/` | Offline test suite (pytest) |
 | `GUIDE.md` | Πλήρης επεξήγηση κάθε δείκτη/threshold |
 | `validate_international_coverage.py` | Έλεγχος αν το yfinance καλύπτει διεθνή tickers πριν τα προσθέσεις μαζικά |
