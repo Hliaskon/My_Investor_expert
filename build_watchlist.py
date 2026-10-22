@@ -39,6 +39,31 @@ _WIKI_HEADERS = {
                    "+https://github.com/Hliaskon/My_Investor_expert)"
 }
 
+# Γνωστά Yahoo exchange suffixes. Χρησιμοποιείται για ticker normalization
+# (build_watchlist) ΚΑΙ για το allow-list του screener.py.
+KNOWN_EXCHANGE_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW", ".BR",
+                           ".HE", ".CO", ".ST", ".OL", ".VI", ".LS", ".IR",
+                           ".T", ".HK")
+
+
+def normalize_intl_ticker(ticker: str, suffix: str) -> str:
+    """
+    FIX N2: το FIX N ("πρόσθεσε suffix μόνο αν δεν υπάρχει τελεία") είχε δύο
+    κενά: (α) share classes τύπου "BT.A" έμεναν χωρίς ".L" (Yahoo θέλει
+    "BT-A.L"), (β) δεν προστάτευε από ήδη-διπλά suffixes ("SAP.DE.DE") σε
+    παλιά CSV. Τώρα: αφαιρούμε επαναλαμβανόμενα γνωστά suffixes, κρατάμε
+    ένα αν υπάρχει, αλλιώς μετατρέπουμε class-share "." → "-" + suffix.
+    """
+    t = str(ticker).strip().upper()
+    innermost = None
+    while t.endswith(KNOWN_EXCHANGE_SUFFIXES):
+        sfx = next(x for x in KNOWN_EXCHANGE_SUFFIXES if t.endswith(x))
+        innermost = sfx               # το τελευταίο που αφαιρείται = το πραγματικό
+        t = t[: -len(sfx)]
+    # π.χ. "AIR.PA.DE" → "AIR" + ".PA" (Airbus = Euronext Paris, όχι Xetra)
+    return t.replace(".", "-") + (innermost or suffix)
+
+
 
 def _read_html_wikipedia(url: str):
     req  = urllib.request.Request(url, headers=_WIKI_HEADERS)
@@ -112,9 +137,7 @@ def fetch_dax(suffix: str = ".DE") -> pd.DataFrame:
                 # κάποιες γραμμές (π.χ. "AIR.PA" — Airbus trades στο Euronext
                 # Paris, όχι Xetra). Πριν πρόσθετε τυφλά → "AIR.PA.DE". Τώρα
                 # προσθέτει μόνο αν λείπει εντελώς suffix.
-                df["ticker"] = df["ticker"].astype(str).str.strip()
-                df["ticker"] = df["ticker"].where(df["ticker"].str.contains(r"\."),
-                                                    df["ticker"] + suffix)
+                df["ticker"] = df["ticker"].apply(lambda x: normalize_intl_ticker(x, suffix))
                 df["market"] = "Germany"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
@@ -139,9 +162,7 @@ def fetch_ftse100(suffix: str = ".L") -> pd.DataFrame:
                 if "gics_sector" not in df.columns:
                     df["gics_sector"] = "Unknown"
                 # FIX N: ίδιο rationale με DAX — προστασία από διπλά suffixes
-                df["ticker"] = df["ticker"].astype(str).str.strip()
-                df["ticker"] = df["ticker"].where(df["ticker"].str.contains(r"\."),
-                                                    df["ticker"] + suffix)
+                df["ticker"] = df["ticker"].apply(lambda x: normalize_intl_ticker(x, suffix))
                 df["market"] = "UK"
                 print(f"  {len(df)} tickers")
                 return df[["ticker", "name", "gics_sector", "market"]]
@@ -417,6 +438,10 @@ if __name__ == "__main__":
 
     frames   = [f for f in frames if not f.empty]
     universe = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    # DAX και EURO STOXX 50 επικαλύπτονται (SAP, Siemens, Allianz...) — κρατάμε
+    # την πρώτη εμφάνιση (DAX/FTSE έχουν πληρέστερο sector mapping).
+    if not universe.empty:
+        universe = universe.drop_duplicates(subset="ticker", keep="first")
 
     if universe.empty:
         print("Καμία εταιρεία δεν βρέθηκε — έλεγξε δικτυακή πρόσβαση/Wikipedia δομή.")

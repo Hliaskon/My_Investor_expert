@@ -37,14 +37,15 @@ jobs:
           WATCHLIST_FILE:    ${{ vars.WATCHLIST_FILE || 'watchlist.csv' }}
         run: python screener.py
 
-      - name: Commit ιστορικότητας (history.csv)
+      # FIX SNAP: snapshots/ = εβδομαδιαίο στιγμιότυπο ΟΛΟΥ του universe,
+      # βάση για τη μέτρηση excess return ανά tier (performance.py).
+      - name: Commit ιστορικότητας (history.csv + snapshots/)
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          if [ -f history.csv ]; then
-            git add history.csv
-            git diff --staged --quiet || git commit -m "chore: update screener history [skip ci]"
+          [ -f history.csv ] && git add history.csv
+          [ -d snapshots ] && git add snapshots/
+          git diff --staged --quiet && echo "Τίποτα νέο για commit." || {
+            git commit -m "chore: update screener history [skip ci]"
             git push
-          else
-            echo "history.csv δεν υπάρχει ακόμα (καμία μετοχή δεν πέρασε τα φίλτρα σε αυτό το run) — τίποτα να γίνει commit."
-          fi
+          }

@@ -1,44 +1,44 @@
 ticker,name,sector
-ADS.DE.DE,Adidas,Consumer Cyclical
-AIR.PA.DE,Airbus,Industrials
-ALV.DE.DE,Allianz,Financials
-BAS.DE.DE,BASF,Basic Materials
-BAYN.DE.DE,Bayer,Healthcare
-BEI.DE.DE,Beiersdorf,Consumer Defensive
-BMW.DE.DE,BMW,Consumer Cyclical
-BNR.DE.DE,Brenntag,Basic Materials
-CBK.DE.DE,Commerzbank,Financials
-CON.DE.DE,Continental,Consumer Cyclical
-DTG.DE.DE,Daimler Truck,Industrials
-DBK.DE.DE,Deutsche Bank,Financials
-DB1.DE.DE,Deutsche Börse,Financials
-DHL.DE.DE,Deutsche Post,Industrials
-DTE.DE.DE,Deutsche Telekom,Communication Services
-EOAN.DE.DE,E.ON,Utilities
-FRE.DE.DE,Fresenius,Healthcare
-FME.DE.DE,Fresenius Medical Care,Healthcare
-G1A.DE.DE,GEA Group,Industrials
-HNR1.DE.DE,Hannover Re,Financials
-HEI.DE.DE,Heidelberg Materials,Basic Materials
-HEN3.DE.DE,Henkel,Consumer Defensive
-IFX.DE.DE,Infineon Technologies,Technology
-MBG.DE.DE,Mercedes-Benz Group,Consumer Cyclical
-MRK.DE.DE,Merck,Healthcare
-MTX.DE.DE,MTU Aero Engines,Industrials
-MUV2.DE.DE,Munich Re,Financials
-PAH3.DE.DE,Porsche SE,Financials
-QIA.DE.DE,Qiagen,Healthcare
-RHM.DE.DE,Rheinmetall,Industrials
-RWE.DE.DE,RWE,Utilities
-SAP.DE.DE,SAP,Technology
-G24.DE.DE,Scout24,Communication Services
-SIE.DE.DE,Siemens,Industrials
-ENR.DE.DE,Siemens Energy,Industrials
-SHL.DE.DE,Siemens Healthineers,Healthcare
-SY1.DE.DE,Symrise,Basic Materials
-VOW3.DE.DE,Volkswagen Group,Consumer Cyclical
-VNA.DE.DE,Vonovia,Real Estate
-ZAL.DE.DE,Zalando,Consumer Cyclical
+ADS.DE,Adidas,Consumer Cyclical
+AIR.PA,Airbus,Industrials
+ALV.DE,Allianz,Financials
+BAS.DE,BASF,Basic Materials
+BAYN.DE,Bayer,Healthcare
+BEI.DE,Beiersdorf,Consumer Defensive
+BMW.DE,BMW,Consumer Cyclical
+BNR.DE,Brenntag,Basic Materials
+CBK.DE,Commerzbank,Financials
+CON.DE,Continental,Consumer Cyclical
+DTG.DE,Daimler Truck,Industrials
+DBK.DE,Deutsche Bank,Financials
+DB1.DE,Deutsche Börse,Financials
+DHL.DE,Deutsche Post,Industrials
+DTE.DE,Deutsche Telekom,Communication Services
+EOAN.DE,E.ON,Utilities
+FRE.DE,Fresenius,Healthcare
+FME.DE,Fresenius Medical Care,Healthcare
+G1A.DE,GEA Group,Industrials
+HNR1.DE,Hannover Re,Financials
+HEI.DE,Heidelberg Materials,Basic Materials
+HEN3.DE,Henkel,Consumer Defensive
+IFX.DE,Infineon Technologies,Technology
+MBG.DE,Mercedes-Benz Group,Consumer Cyclical
+MRK.DE,Merck,Healthcare
+MTX.DE,MTU Aero Engines,Industrials
+MUV2.DE,Munich Re,Financials
+PAH3.DE,Porsche SE,Financials
+QIA.DE,Qiagen,Healthcare
+RHM.DE,Rheinmetall,Industrials
+RWE.DE,RWE,Utilities
+SAP.DE,SAP,Technology
+G24.DE,Scout24,Communication Services
+SIE.DE,Siemens,Industrials
+ENR.DE,Siemens Energy,Industrials
+SHL.DE,Siemens Healthineers,Healthcare
+SY1.DE,Symrise,Basic Materials
+VOW3.DE,Volkswagen Group,Consumer Cyclical
+VNA.DE,Vonovia,Real Estate
+ZAL.DE,Zalando,Consumer Cyclical
 III.L,3i,Financials
 ABDN.L,Aberdeen Group,Financials
 ADM.L,Admiral Group,Financials
@@ -58,7 +58,7 @@ BEZ.L,Beazley,Financials
 BP.L,BP,Energy
 BATS.L,British American Tobacco,Consumer Defensive
 BLND.L,British Land,Real Estate
-BT.A.L,BT Group,Communication Services
+BT-A.L,BT Group,Communication Services
 BNZL.L,Bunzl,Industrials
 BRBY.L,Burberry Group,Consumer Cyclical
 CNA.L,Centrica,Utilities
@@ -139,27 +139,17 @@ UU.L,United Utilities,Utilities
 VOD.L,Vodafone Group,Communication Services
 WEIR.L,Weir,Industrials
 WTB.L,Whitbread,Consumer Cyclical
-ADS.DE,Adidas,Consumer Cyclical
 ADYEN.AS,Adyen,Financials
 AD.AS,Ahold Delhaize,Consumer Defensive
 AI.PA,Air Liquide,Basic Materials
-AIR.PA,Airbus,Industrials
-ALV.DE,Allianz,Financials
 ABI.BR,Anheuser-Busch InBev,Consumer Defensive
 ARGX.BR,Argenx,Healthcare
 ASML.AS,ASML Holding,Technology
 CS.PA,Axa,Financials
-BAS.DE,BASF,Basic Materials
-BAYN.DE,Bayer,Healthcare
 BBVA.MC,BBVA,Financials
 SAN.MC,Banco Santander,Financials
-BMW.DE,BMW,Consumer Cyclical
 BNP.PA,BNP Paribas,Financials
 BN.PA,Danone,Consumer Defensive
-DBK.DE,Deutsche Bank,Financials
-DB1.DE,Deutsche Börse,Financials
-DHL.DE,Deutsche Post,Industrials
-DTE.DE,Deutsche Telekom,Communication Services
 ENEL.MI,Enel,Utilities
 ENI.MI,Eni,Energy
 EL.PA,EssilorLuxottica,Healthcare
@@ -167,23 +157,16 @@ RACE.MI,Ferrari,Consumer Cyclical
 RMS.PA,Hermès,Consumer Cyclical
 IBE.MC,Iberdrola,Utilities
 ITX.MC,Inditex,Consumer Cyclical
-IFX.DE,Infineon Technologies,Technology
 INGA.AS,ING Group,Financials
 ISP.MI,Intesa Sanpaolo,Financials
 OR.PA,L'Oréal,Consumer Defensive
 MC.PA,LVMH Moët Hennessy Louis Vuitton,Consumer Cyclical
-MBG.DE,Mercedes-Benz Group,Consumer Cyclical
-MUV2.DE,Munich Re,Financials
 NDA-FI.HE,Nordea,Financials
 PRX.AS,Prosus,Consumer Cyclical
-RHM.DE,Rheinmetall,Industrials
 SAF.PA,Safran,Industrials
 SGO.PA,Saint-Gobain,Industrials
 SAN.PA,Sanofi,Healthcare
-SAP.DE,SAP,Technology
 SU.PA,Schneider Electric,Industrials
-SIE.DE,Siemens,Industrials
-ENR.DE,Siemens Energy,Industrials
 TTE.PA,TotalEnergies,Energy
 DG.PA,Vinci SA,Industrials
 UCG.MI,UniCredit,Financials
