@@ -31,8 +31,77 @@ WATCHLIST_FILE = os.environ.get("WATCHLIST_FILE", "watchlist.csv")
 WATCHLIST      = _load_watchlist(WATCHLIST_FILE)
 ALPHA_KEY      = os.environ.get("ALPHA_KEY", "")  # πλέον προαιρετικό, δεν χρησιμοποιείται
 
+# Fallback τιμές — αντικαθίστανται από FRED στο load_market_rates() αν
+# υπάρχει FRED_API_KEY. ΥΠΟΘΕΣΗ: χρησιμοποιείται το US 10Y για ΟΛΕΣ τις
+# αγορές (και Ευρώπη) — για .DE/.PA το σωστό θα ήταν Bund yield.
 RISK_FREE_RATE  = 0.042
 ERP             = 0.055
+# Graham (1974 revision): 4.4 = AAA yield εποχής, bond_yield = ΤΡΕΧΟΝ AAA.
+GRAHAM_BOND_YIELD = 4.4
+# FIX W: floor στο WACC. Με beta floor 0.3 το WACC έπεφτε στο ~5.9%, μόλις
+# ~3.4 μονάδες πάνω από το terminal growth (2.5%) → το terminal value
+# κυριαρχούσε και φούσκωνε συστηματικά το DCF MoS (διάμεσο +87% στο
+# history.csv). 8% = συντηρητική υπόθεση για equity cost of capital.
+MIN_WACC        = float(os.environ.get("MIN_WACC", "0.08"))
+
+
+def load_market_rates():
+    """
+    FIX W: RFR (US 10Y, FRED DGS10) και Graham bond yield (Moody's Aaa,
+    FRED AAA) από live δεδομένα αντί για hardcoded. Αποτυχία → κρατάμε
+    τα fallback, με log.
+    """
+    global RISK_FREE_RATE, GRAHAM_BOND_YIELD
+    if not os.environ.get("FRED_API_KEY"):
+        print(f"[RATES] FRED_API_KEY λείπει — fallback RFR={RISK_FREE_RATE:.2%}, "
+              f"AAA={GRAHAM_BOND_YIELD}%")
+        return
+    try:
+        from fredapi import Fred
+        fred  = Fred(api_key=os.environ["FRED_API_KEY"])
+        start = (datetime.date.today() - datetime.timedelta(days=120)).isoformat()
+        dgs10 = fred.get_series("DGS10", observation_start=start).dropna()
+        if len(dgs10) and 0.5 <= float(dgs10.iloc[-1]) <= 10:
+            RISK_FREE_RATE = float(dgs10.iloc[-1]) / 100
+        aaa = fred.get_series("AAA", observation_start=start).dropna()
+        if len(aaa) and 1 <= float(aaa.iloc[-1]) <= 12:
+            GRAHAM_BOND_YIELD = float(aaa.iloc[-1])
+        print(f"[RATES] RFR (US10Y)={RISK_FREE_RATE:.2%} · Aaa={GRAHAM_BOND_YIELD:.2f}% "
+              f"· WACC floor={MIN_WACC:.0%}")
+    except Exception as e:
+        print(f"[RATES] FRED αποτυχία ({e}) — fallback RFR={RISK_FREE_RATE:.2%}")
+
+
+# FIX CUR: νομίσματα όπου η Yahoo δίνει τιμή σε υποδιαίρεση (πένες κλπ).
+MINOR_UNIT_CURRENCIES = {"GBp", "GBX", "ZAc", "ILA"}
+
+
+def reconcile_eps_currency(price, pe, eps, price_ccy, fin_ccy):
+    """
+    FIX CUR: η Yahoo δίνει την τιμή στο νόμισμα διαπραγμάτευσης (`currency`)
+    αλλά EPS/financials στο νόμισμα αναφοράς (`financialCurrency`). Π.χ.
+    .L → τιμή σε GBp (πένες), EPS σε GBP· ADR (BABA) → τιμή σε USD, EPS σε
+    CNY ανά μετοχή (όχι ανά ADR). Χωρίς διόρθωση DCF/Graham/EPS gate
+    συγκρίνουν ανόμοια μεγέθη.
+
+    Μέθοδος: το trailingPE της Yahoo υπολογίζεται σε συνεπές νόμισμα, άρα
+    (price/PE)/EPS = συντελεστής μετατροπής (περιλαμβάνει FX ΚΑΙ ADR ratio).
+    Εφαρμόζεται ΜΟΝΟ όταν υπάρχει δηλωμένη ασυμφωνία νομισμάτων — αλλιώς
+    μικρές αποκλίσεις PE/EPS (timing) θα "διορθώνονταν" λάθος.
+
+    Επιστρέφει (factor, note): factor μετατρέπει per-share τιμές από
+    financial currency σε price currency· None = μη μετατρέψιμο.
+    """
+    mismatch = (price_ccy in MINOR_UNIT_CURRENCIES) or \
+               bool(price_ccy and fin_ccy and price_ccy != fin_ccy)
+    if not mismatch:
+        return 1.0, None
+    if price and pe and pe > 0 and eps and eps > 0:
+        factor = (price / pe) / eps
+        return factor, (f"EPS σε {fin_ccy}, τιμή σε {price_ccy} — "
+                        f"μετατροπή ×{factor:.4g} (βάσει Yahoo P/E)")
+    return None, (f"EPS σε {fin_ccy}, τιμή σε {price_ccy} — αδύνατη μετατροπή "
+                  f"(χωρίς θετικό P/E), DCF/Graham απενεργοποιημένα")
 
 # FIX M (πείραμα): η Yahoo μπλοκάρει (429) requests από το κοινόχρηστο
 # GitHub Actions IP pool — επιβεβαιώθηκε empirically, ακόμα και σε US
@@ -177,7 +246,7 @@ def get_real_roic(ticker: str, _yf_ticker_obj=None) -> tuple:
     αντί για το δικό μας proxy (ROE × 1/(1+D/E)) που δεν είναι ακριβής
     NOPAT/Invested Capital υπολογισμός.
 
-    NOPAT = EBIT × (1 - 0.21)  [21% εκτιμώμενος εταιρικός φόρος ΗΠΑ]
+    NOPAT = TTM EBIT (4 τρίμηνα) × (1 - 0.21)  [21% εκτιμώμενος φόρος ΗΠΑ]
     Invested Capital = Total Assets - Current Liabilities
 
     Προσοχή: 2 επιπλέον yfinance calls per ticker (quarterly_financials,
@@ -192,21 +261,40 @@ def get_real_roic(ticker: str, _yf_ticker_obj=None) -> tuple:
         t = _yf_ticker_obj or yf.Ticker(ticker, session=_YF_SESSION)
         q_income  = t.quarterly_financials
         q_balance = t.quarterly_balance_sheet
-        roic_values = []
-        if q_income is not None and q_balance is not None:
-            for i in range(min(4, q_income.shape[1])):
-                try:
-                    ebit = q_income.iloc[:, i].get("EBIT") or q_income.iloc[:, i].get("Operating Income")
-                    nopat = ebit * 0.79 if ebit else None
-                    total_assets  = q_balance.iloc[:, i].get("Total Assets")
-                    current_liab  = q_balance.iloc[:, i].get("Current Liabilities")
-                    invested_capital = (total_assets - current_liab) if (total_assets and current_liab) else None
-                    if nopat and invested_capital and invested_capital > 0:
-                        roic_values.append(nopat / invested_capital)
-                except Exception:
-                    continue
-        roic_current  = roic_values[0] if roic_values else None
-        roic_trend_up = (roic_values[0] > roic_values[-1]) if len(roic_values) >= 2 else None
+        if q_income is None or q_balance is None or q_income.empty or q_balance.empty:
+            return None, None
+
+        def _val(df, names, col):
+            # FIX ROIC: το παλιό `x.get("EBIT") or ...` αποτύγχανε με NaN
+            # (το NaN είναι truthy στην Python) — ρητός έλεγχος pd.notna.
+            if col >= df.shape[1]:
+                return None
+            for n in names:
+                if n in df.index:
+                    v = df.loc[n].iloc[col]
+                    if pd.notna(v):
+                        return float(v)
+            return None
+
+        def _ic(col):
+            ta = _val(q_balance, ["Total Assets"], col)
+            cl = _val(q_balance, ["Current Liabilities"], col)
+            return (ta - cl) if (ta is not None and cl is not None and ta > cl) else None
+
+        # FIX ROIC (κρίσιμο): παλιά ROIC = ΤΡΙΜΗΝΙΑΙΟ EBIT / invested capital
+        # και συγκρινόταν με ΕΤΗΣΙΟ WACC → υποεκτίμηση ~×4, σχεδόν πάντα
+        # "ROIC < WACC". Τώρα: TTM EBIT (άθροισμα 4 τριμήνων). Χωρίς 4
+        # πλήρη τρίμηνα → None (fallback σε proxy), όχι annualization ενός.
+        ebits = [_val(q_income, ["EBIT", "Operating Income"], i) for i in range(4)]
+        ic0   = _ic(0)
+        if any(e is None for e in ebits) or not ic0:
+            return None, None
+        roic_current = sum(ebits) * (1 - 0.21) / ic0   # ΥΠΟΘΕΣΗ: φόρος 21% (US) για όλους
+
+        # Trend: τριμηνιαίο ROIC πιο πρόσφατου vs 4ου τριμήνου (ο λόγος δεν
+        # επηρεάζεται από annualization).
+        ic3 = _ic(3)
+        roic_trend_up = (ebits[0] / ic0 > ebits[3] / ic3) if ic3 else None
         return roic_current, roic_trend_up
     except Exception as e:
         print(f"[ROIC-REAL] {ticker}: αποτυχία ({e}) — fallback σε proxy")
@@ -351,6 +439,8 @@ def get_fundamentals_yfinance(ticker: str) -> dict | None:
             "50DayMovingAverage":         info.get("fiftyDayAverage"),
             "Sector":                     info.get("sector", "Unknown"),
             "_price":                     price,
+            "_currency":                  info.get("currency"),
+            "_financial_currency":        info.get("financialCurrency"),
         }
     except Exception as e:
         print(f"[YFINANCE] {ticker}: αποτυχία fetch fundamentals — {e}")
@@ -387,7 +477,7 @@ def safe_float(val, default=0):
         return default
 
 def wacc(beta):
-    return RISK_FREE_RATE + beta * ERP
+    return max(MIN_WACC, RISK_FREE_RATE + beta * ERP)
 
 def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5):
     if not fcf_per_share or fcf_per_share <= 0:
@@ -400,7 +490,8 @@ def dcf_value(fcf_per_share, g_rate, wacc_rate, years=5):
     total   += terminal / (1 + wacc_rate)**years
     return round(total, 2)
 
-def graham_value(eps, g_pct, sector, bond_yield=4.4):
+def graham_value(eps, g_pct, sector, bond_yield=None):
+    bond_yield = bond_yield or GRAHAM_BOND_YIELD
     if sector in GRAHAM_EXCLUDED_SECTORS:
         return None
     if not eps or eps <= 0:
@@ -538,11 +629,26 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
         if not price:
             raise ValueError("No price available")
 
-        # Μετά τον υπολογισμό price:
+        # FIX P2: παλιά η τιμή αντικαθίστατο σιωπηλά με τον 50DMA όταν
+        # απείχε >50%. Σε πραγματικό σοκ (−50% σε profit warning) αυτό
+        # έκρυβε την πτώση και υπολόγιζε MoS σε ανύπαρκτη τιμή. Τώρα: η
+        # τιμή μένει, η μετοχή σημαίνεται και το tier κόβεται σε max HOLD.
+        data_warnings = []
         if price and ma50 and abs(price - ma50) / ma50 > 0.5:
-            # Τιμή απέχει >50% από 50DMA — πιθανό data artifact
-            print(f"[WARNING] {ticker}: price={price} vs 50DMA={ma50} — using 50DMA")
-            price = ma50
+            print(f"[WARNING] {ticker}: price={price} vs 50DMA={ma50} — flagged (όχι override)")
+            data_warnings.append(f"Τιμή {price} απέχει >50% από 50DMA {ma50:.2f} — "
+                                 f"data error ή πραγματικό σοκ, έλεγξε χειροκίνητα")
+
+        # FIX CUR: EPS στο νόμισμα της τιμής (βλ. reconcile_eps_currency)
+        fx_factor, currency_note = reconcile_eps_currency(
+            price, pe, eps, ov.get("_currency"), ov.get("_financial_currency"))
+        if currency_note:
+            print(f"  [currency] {ticker}: {currency_note}")
+        if fx_factor is None:
+            eps = None
+            data_warnings.append(currency_note)
+        elif eps:
+            eps = eps * fx_factor
 
         w          = wacc(beta)
         sector_cap = SECTOR_G_CAP.get(sector, 0.12)
@@ -660,6 +766,8 @@ def screen_ticker(ticker: str, watchlist_sector: str = None, watchlist_market: s
             "cape_proxy":     round(pe, 1) if pe else None,
             "macro_favored":  False,   # overwritten by apply_filters()
             "market":         watchlist_market,
+            "currency_note":  currency_note,
+            "data_warning":   " · ".join(data_warnings) or None,
         }
 
     except Exception as e:
@@ -809,6 +917,12 @@ def compute_tier(row: dict, favored_sectors=None) -> dict:
     else:
         tier = "AVOID"
         b["tier_reason"] = f"Score {total}/100 — ανεπαρκή σήματα"
+    # FIX P2/CUR: γνωστό πρόβλημα δεδομένων (τιμή/νόμισμα) → ανώτατο HOLD
+    warn = row.get("data_warning")
+    if _present(warn) and warn:
+        if tier in ("STRONG BUY", "BUY"):
+            tier = "HOLD"
+        b["tier_reason"] += f" · ⚠ {warn}"
     b["tier"] = tier
     return b
 
@@ -1099,13 +1213,18 @@ if __name__ == "__main__":
                   f"batch {batch_idx}/{n_batches} ({len(batch_df)} μετοχές): "
                   f"{', '.join(batch_df['ticker'].tolist())}.")
     print(f"Starting screener — {batch_info}")
+    load_market_rates()
 
     # FIX F: το παλιό φίλτρο "if '.' in ticker: skip" έμπλοκε ΚΑΘΕ ticker με
     # τελεία — σωστό για ξεχασμένα US class-share tickers (π.χ. BF.B) αλλά
     # θα έμπλοκε ΚΑΙ κάθε ευρωπαϊκό ticker (SAP.DE, ULVR.L, MC.PA). Τώρα
     # επιτρέπονται ρητά τα γνωστά exchange suffixes· ό,τι άλλο έχει τελεία
     # συνεχίζει να παραλείπεται όπως πριν.
-    INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW", ".T", ".HK")
+    # .BR (Βρυξέλλες) / .HE (Ελσίνκι) κ.ά. υπάρχουν ήδη στο watchlist_europe.csv
+    # αλλά παραλείπονταν σιωπηλά — κοινή λίστα με build_watchlist.py.
+    INTL_SUFFIXES = (".DE", ".L", ".PA", ".AS", ".MI", ".MC", ".SW", ".BR",
+                     ".HE", ".CO", ".ST", ".OL", ".VI", ".LS", ".IR",
+                     ".T", ".HK")
 
     results = []
     consecutive_failures = 0
