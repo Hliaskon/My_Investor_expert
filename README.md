@@ -30,9 +30,17 @@ build_watchlist.py  →  watchlist*.csv  →  screener.py  →  report.py  →  
    (OVERHEATING/GOLDILOCKS/STAGFLATION/RECESSION) → favored/avoid sectors.
 4. **`report.py`** — χτίζει το HTML email. Πλήρης ανάλυση μόνο για
    STRONG BUY/BUY (μέχρι 10, ώστε να μη σκάει το όριο μεγέθους του Gmail).
-5. **`history.csv`** — κάθε shortlist pick καταγράφεται με ημερομηνία+τιμή.
-   Μετά από 21+ μέρες, εμφανίζεται "Performance Tracker" section στο email
-   με πραγματική απόδοση — έτσι μαθαίνεις αν το σήμα όντως δουλεύει.
+5. **`snapshots/YYYY-MM-DD.csv`** — κάθε εβδομάδα αποθηκεύεται ΟΛΟ το
+   universe (όλα τα πεδία, tier/score για κάθε μετοχή, `passed_filters`).
+   Το yfinance δεν δίνει point-in-time ιστορικά fundamentals, οπότε αυτό
+   είναι το μόνο τίμιο backtest dataset — χτίζεται από τώρα και μετά.
+6. **`performance.py`** — "Αξιολόγηση Σήματος" στο email: **excess return
+   vs benchmark** (SPY / ISF.L / EXSA.DE, total return, entry το πρώτο close
+   μετά το σήμα) ανά tier σε ορίζοντες 1/3/6/12 μηνών, hit rate, και
+   **Information Coefficient** (Spearman score↔excess). Αν οι STRONG BUY δεν
+   νικούν σταθερά HOLD/AVOID και benchmark, το tier δεν έχει αξία.
+7. **`history.csv`** — παλιό ledger shortlist picks (για τα ledger badges
+   και ως πηγή σημάτων για ημερομηνίες πριν τα snapshots).
 
 ## Tier System (STRONG BUY / BUY / HOLD / AVOID)
 
@@ -96,9 +104,10 @@ Actions → Build Watchlist → Run workflow → επίλεξε αγορά:
 
 ## Γνωστοί περιορισμοί — τι να μην εμπιστευτείς τυφλά
 
-- **Χωρίς backtest ακόμα.** Το `history.csv`/performance tracker μόλις
-  ξεκίνησε να μαζεύει δεδομένα. Μέχρι να έχεις 2-3 μήνες ιστορικού, δεν
-  ξέρεις αν το tier σήμα προβλέπει πραγματικά κάτι.
+- **Χωρίς backtest ακόμα.** Τα snapshots ξεκίνησαν τώρα. Τα εβδομαδιαία
+  σήματα επικαλύπτονται (ίδιες μετοχές κάθε εβδομάδα), άρα τα n/t-stat
+  υπερεκτιμούν τη βεβαιότητα — χρειάζονται **≥12 μήνες** πριν βγάλεις
+  συμπέρασμα. Μην αλλάζεις βάρη/thresholds με βάση 1-2 μήνες.
 - **yfinance είναι unofficial** (reverse-engineered, όχι επίσημο API).
   Χρησιμοποιεί `curl_cffi` με browser-impersonation για να παρακάμψει
   rate-limiting της Yahoo σε shared GitHub Actions IPs — αυτό μπορεί να
@@ -130,6 +139,8 @@ Actions → Build Watchlist → Run workflow → επίλεξε αγορά:
 | `report.py` | HTML email template |
 | `watchlist.csv` | US universe (S&P 500 + NASDAQ 100 extras) |
 | `watchlist_europe.csv` / `watchlist_asia.csv` / `watchlist_china_adr.csv` | Παράγονται από `Build Watchlist` workflow |
-| `history.csv` | Ιστορικό προτάσεων για performance tracking |
+| `history.csv` | Ιστορικό shortlist προτάσεων (ledger badges) |
+| `snapshots/` | Εβδομαδιαίο στιγμιότυπο όλου του universe (backtest dataset) |
+| `performance.py` | Excess return vs benchmark ανά tier + IC |
 | `GUIDE.md` | Πλήρης επεξήγηση κάθε δείκτη/threshold |
 | `validate_international_coverage.py` | Έλεγχος αν το yfinance καλύπτει διεθνή tickers πριν τα προσθέσεις μαζικά |

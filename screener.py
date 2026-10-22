@@ -1135,9 +1135,9 @@ def claude_summary(stocks_json, batch_info):
 
 
 HISTORY_FILE = os.path.join(BASE_DIR, "history.csv")
-# Μετά από πόσες ημέρες να εμφανίζεται μια παλιά πρόταση στο performance
-# tracker (αποφεύγει θόρυβο με μετοχές που φλαγκαρίστηκαν πριν 2 ημέρες)
-PERFORMANCE_MIN_DAYS = 21
+# FIX SNAP: εβδομαδιαίο snapshot ΟΛΟΥ του universe (όχι μόνο shortlist) —
+# βάση για μέτρηση excess return ανά tier και IC (βλ. performance.py).
+SNAPSHOT_DIR = os.path.join(BASE_DIR, "snapshots")
 
 
 def record_history(shortlist_df: pd.DataFrame):
@@ -1222,54 +1222,6 @@ def get_ledger_badges(shortlist_df: pd.DataFrame) -> dict:
             pass
         badges[ticker] = " · ".join(parts)
     return badges
-
-
-def check_performance() -> pd.DataFrame:
-    """
-    Διαβάζει το history.csv, βρίσκει picks παλαιότερα από
-    PERFORMANCE_MIN_DAYS, τραβάει ΤΡΕΧΟΥΣΑ τιμή (yfinance) και υπολογίζει
-    πραγματική απόδοση από τη στιγμή που φλαγκαρίστηκαν.
-
-    Επιστρέφει DataFrame: ticker, date_flagged, price_at_flag,
-    price_now, return_pct, days_held. Άδειο αν δεν υπάρχει ιστορικό ακόμα.
-    """
-    if not os.path.exists(HISTORY_FILE):
-        print("[PERFORMANCE] Δεν υπάρχει ακόμα history.csv — πρώτο run.")
-        return pd.DataFrame()
-
-    hist  = pd.read_csv(HISTORY_FILE)
-    hist["date_flagged"] = pd.to_datetime(hist["date_flagged"])
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=PERFORMANCE_MIN_DAYS)
-    eligible = hist[hist["date_flagged"] <= cutoff].copy()
-    if eligible.empty:
-        print(f"[PERFORMANCE] Καμία πρόταση >{PERFORMANCE_MIN_DAYS} ημερών ακόμα.")
-        return pd.DataFrame()
-
-    # Κρατάμε μόνο το ΠΡΩΤΟ flag ανά ticker (αποφεύγει duplicate rows αν
-    # η ίδια μετοχή προτάθηκε ξανά αργότερα)
-    eligible = eligible.sort_values("date_flagged").drop_duplicates(
-        subset="ticker", keep="first")
-
-    rows = []
-    for _, r in eligible.iterrows():
-        current = get_price_yfinance(r["ticker"])
-        if current is None:
-            continue
-        ret_pct = round((current - r["price_at_flag"]) / r["price_at_flag"] * 100, 1)
-        days    = (datetime.datetime.now() - r["date_flagged"]).days
-        rows.append({
-            "ticker":        r["ticker"],
-            "date_flagged":  r["date_flagged"].date().isoformat(),
-            "price_at_flag": r["price_at_flag"],
-            "price_now":     current,
-            "return_pct":    ret_pct,
-            "days_held":     days,
-        })
-        time.sleep(REQUEST_DELAY)
-
-    result = pd.DataFrame(rows).sort_values("return_pct", ascending=False)
-    print(f"[PERFORMANCE] {len(result)} παλιές προτάσεις με tracked απόδοση")
-    return result
 
 
 def send_email(html_body, week_number, batch_idx, n_batches):
@@ -1377,9 +1329,23 @@ if __name__ == "__main__":
     # FIX B: soft sector filter
     shortlist = apply_filters(df, favored_sectors=favored_sectors)
 
-    # FIX H: ιστορικότητα — performance παλιών picks ΠΡΙΝ γράψουμε νέα,
-    # μετά καταγραφή των νέων για το επόμενο run
-    performance_df = check_performance()
+    # FIX SNAP: tier για ΟΛΟ το universe (και όσες κόπηκαν από τα φίλτρα) —
+    # χωρίς αυτό δεν μπορούμε να ελέγξουμε αν τα φίλτρα/tiers ξεχωρίζουν
+    # νικητές από χαμένους.
+    from performance import save_snapshot, evaluate
+    scored = df.copy()
+    tier_all = [compute_tier(r, favored_sectors) for r in scored.to_dict("records")]
+    for k_out, k_in in (("tier", "tier"), ("tier_score", "total_score"),
+                        ("valuation_score", "valuation_score"), ("quality_score", "quality_score"),
+                        ("macro_score", "macro_score"), ("catalyst_score", "catalyst_score"),
+                        ("data_completeness", "data_completeness_pct")):
+        scored[k_out] = [t[k_in] for t in tier_all]
+    scored["passed_filters"] = scored["ticker"].isin(shortlist["ticker"]) if not shortlist.empty else False
+    save_snapshot(scored, SNAPSHOT_DIR, today)
+
+    # FIX H/SNAP: excess return vs benchmark ανά tier + IC — ΠΡΙΝ γράψουμε
+    # τα νέα picks στο history.csv
+    perf = evaluate(SNAPSHOT_DIR, HISTORY_FILE, session=_YF_SESSION, delay=REQUEST_DELAY)
     ledger_badges  = get_ledger_badges(shortlist)  # ΠΡΙΝ το record_history!
     record_history(shortlist)
 
@@ -1394,6 +1360,6 @@ if __name__ == "__main__":
     html = build_html(df, shortlist, summary, macro_html=macro_html,
                       alignment_map=alignment_map,
                       batch_idx=batch_idx, n_batches=n_batches,
-                      performance_df=performance_df,
+                      perf=perf,
                       ledger_badges=ledger_badges)
     send_email(html, week_number, batch_idx, n_batches)

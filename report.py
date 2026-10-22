@@ -162,29 +162,52 @@ TEMPLATE = """
 {{ macro_html }}
 {% endif %}
 
-{% if performance %}
+{% if perf_tiers or perf_tickers %}
 <div class="card">
-  <div class="sec">📈 Performance Tracker — Παλιότερες Προτάσεις</div>
+  <div class="sec">📈 Αξιολόγηση Σήματος — Excess Return vs Benchmark</div>
+  <div style="font-size:11px;color:#666;margin-bottom:8px">
+    {{ perf_n_dates }} ημερομηνίες σημάτων από {{ perf_first_date }}. Excess = απόδοση μετοχής − benchmark
+    αγοράς (SPY / ISF.L / EXSA.DE), total return, entry το πρώτο close μετά το σήμα.
+  </div>
+  {% if perf_tiers %}
   <table>
+    <tr><th>Ορίζοντας</th>{% for t in tiers %}<th>{{ t }}</th>{% endfor %}</tr>
+    {% for h in horizons %}{% if h in perf_tiers %}
     <tr>
-      <th>Ticker</th><th>Ημ/νία Πρότασης</th><th>Τιμή Τότε</th>
-      <th>Τιμή Τώρα</th><th>Απόδοση</th><th>Ημέρες</th>
+      <td style="font-weight:700">{{ h }}</td>
+      {% for t in tiers %}{% set c = perf_tiers[h].get(t) %}
+      <td>{% if c %}<span class="{{ 'green' if c.mean_excess > 0 else 'red' }}" style="font-weight:700">{{ '%+.1f'|format(c.mean_excess) }}%</span>
+        <div class="muted" style="font-size:10px">hit {{ '%.0f'|format(c.hit_rate) }}% · n={{ c.n }} ({{ c.n_dates }} ημ.)</div>{% else %}<span class="muted">—</span>{% endif %}</td>
+      {% endfor %}
     </tr>
-    {% for p in performance %}
+    {% endif %}{% endfor %}
+  </table>
+  {% endif %}
+  {% if perf_ic %}
+  <div style="font-size:11px;margin-top:8px">
+    <strong>Information Coefficient</strong> (Spearman score↔excess, μέσος ανά ημερομηνία):
+    {% for r in perf_ic %}{{ r.horizon }}: {{ '%+.3f'|format(r.mean_ic) }}{% if r.t_stat is not none %} (t={{ '%.1f'|format(r.t_stat) }}, {{ r.n_dates }} ημ.){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+  {% if perf_tickers %}
+  <table style="margin-top:10px">
+    <tr><th>Ticker</th><th>Πρόταση</th><th>Tier</th><th>Απόδοση</th><th>Benchmark</th><th>Excess</th><th>Ημέρες</th></tr>
+    {% for p in perf_tickers %}
     <tr>
       <td class="green" style="font-weight:700">{{ p.ticker }}</td>
       <td class="muted">{{ p.date_flagged }}</td>
-      <td>${{ p.price_at_flag }}</td>
-      <td>${{ p.price_now }}</td>
-      <td class="{{ 'green' if p.return_pct > 0 else 'red' }}" style="font-weight:700">
-        {{ '%+.1f'|format(p.return_pct) }}%
-      </td>
+      <td class="muted">{{ p.tier }}</td>
+      <td>{{ '%+.1f'|format(p.return_pct) }}%</td>
+      <td class="muted">{{ '%+.1f'|format(p.bench_pct) }}% {{ p.benchmark }}</td>
+      <td class="{{ 'green' if p.excess_pct > 0 else 'red' }}" style="font-weight:700">{{ '%+.1f'|format(p.excess_pct) }}%</td>
       <td class="muted">{{ p.days_held }}</td>
     </tr>
     {% endfor %}
   </table>
+  {% endif %}
   <div style="font-size:10px;color:#888;margin-top:10px">
-    Μετοχές που φλαγκαρίστηκαν πριν 21+ ημέρες — πραγματική απόδοση από την ημέρα πρότασης έως σήμερα.
+    ⚠ Τα εβδομαδιαία σήματα επικαλύπτονται (ίδιες μετοχές κάθε εβδομάδα) — τα n και t υπερεκτιμούν τη βεβαιότητα.
+    Χρειάζονται ≥12 μήνες δεδομένων πριν βγει οποιοδήποτε συμπέρασμα. IC &gt; 0.03–0.05 σταθερά = χρήσιμο σήμα.
   </div>
 </div>
 {% endif %}
@@ -379,7 +402,7 @@ def _records_no_nan(df):
 
 
 def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
-               batch_idx=1, n_batches=5, performance_df=None, ledger_badges=None):
+               batch_idx=1, n_batches=5, perf=None, ledger_badges=None):
     if alignment_map is None:
         alignment_map = {}
     ledger_badges = ledger_badges or {}
@@ -392,8 +415,18 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
     env.globals["roic_badge"]      = roic_badge
     env.globals["roe_quality_badge"] = roe_quality_badge
     t = env.from_string(TEMPLATE)
-    performance = ([] if performance_df is None or performance_df.empty
-                    else performance_df.to_dict("records"))
+    # FIX SNAP: performance.evaluate() output → template-friendly δομές
+    perf = perf or {}
+    ts = perf.get("tier_stats")
+    perf_tiers = {}
+    if ts is not None and not ts.empty:
+        for r in ts.to_dict("records"):
+            perf_tiers.setdefault(r["horizon"], {})[r["tier"]] = r
+    ic = perf.get("ic")
+    perf_ic = [] if ic is None or ic.empty else _records_no_nan(ic)
+    tk = perf.get("tickers")
+    MAX_PERF_TICKERS = 15   # όριο μεγέθους email (Gmail clip ~102KB)
+    perf_tickers = [] if tk is None or tk.empty else tk.head(MAX_PERF_TICKERS).to_dict("records")
 
     # FIX S: το πλήρες σύνολο (π.χ. 217+ μετοχές) κάνει το HTML >380KB —
     # το Gmail κόβει μηνύματα >~100KB ("[Message clipped]"), χάνοντας τον
@@ -437,5 +470,11 @@ def build_html(df_all, df_short, summary="", macro_html="", alignment_map=None,
         summary       = summary,
         macro_html    = macro_html,
         alignment_map = alignment_map,
-        performance   = performance,
+        perf_tiers    = perf_tiers,
+        perf_ic       = perf_ic,
+        perf_tickers  = perf_tickers,
+        perf_n_dates  = perf.get("n_signal_dates", 0),
+        perf_first_date = perf.get("first_date"),
+        tiers         = ["STRONG BUY", "BUY", "HOLD", "AVOID"],
+        horizons      = ["1m", "3m", "6m", "12m"],
     )
